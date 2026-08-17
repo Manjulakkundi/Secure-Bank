@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+**/node_modules/
+__pycache__/
+*.pyc
+.Python
+venv/
+*.egg-info/
+
+# Environment variables — NEVER commit
+.env
+.env.*
+backend/.env
+customer-app/.env
+admin-app/.env
+
+# Logs
+backend/logs/*.log
+*.log
+
+# Build outputs
+build/
+dist/
+coverage/
+customer-app/build/
+admin-app/build/
+frontend/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+mysql_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+

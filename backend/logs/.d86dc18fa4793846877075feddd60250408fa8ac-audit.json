@@ -1,0 +1,40 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 30
+    },
+    "auditLog": "E:\\projects\\banking-system-v3\\backend\\logs\\.d86dc18fa4793846877075feddd60250408fa8ac-audit.json",
+    "files": [
+        {
+            "date": 1784444244302,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-07-19.log",
+            "hash": "61edadd6e2b8d689b6ab4fb479390fd4fd772b28e2d986576e1c0866e870a4af"
+        },
+        {
+            "date": 1784565097675,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-07-20.log",
+            "hash": "30fb3e59c42deec17a5d19d612bc2345259b9b7e3de67bf76525b0223e76b771"
+        },
+        {
+            "date": 1785775247036,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-08-03.log",
+            "hash": "1ea60d75130a4ecbaa2f087d2ac85a2cb389c7467eb0c084e22aad614acc5c3c"
+        },
+        {
+            "date": 1786209758823,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-08-08.log",
+            "hash": "a7f3d080c41ff1f4ace6b1e72d29c6d0a4226f99b7418da1e2312b5742a25f88"
+        },
+        {
+            "date": 1786983949932,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-08-17.log",
+            "hash": "7b9fe80a4bd994f52bac0344d57d569c245294345d8b14c569830d625885e945"
+        },
+        {
+            "date": 1786991458086,
+            "name": "E:\\projects\\banking-system-v3\\backend\\logs\\combined-2026-08-18.log",
+            "hash": "97e26885acbc5edfb785d5b49958b3edd7b6d2ca8170e04d22dce73087e49b38"
+        }
+    ],
+    "hashType": "sha256"
+}
