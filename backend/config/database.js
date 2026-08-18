@@ -7,15 +7,18 @@ require('dotenv').config();
 
 const pool = mysql.createPool({
   host:     process.env.DB_HOST     || '127.0.0.1',
+  port:     parseInt(process.env.DB_PORT, 10) || 3306,
   user:     process.env.DB_USER     || 'root',
-  password: process.env.DB_PASS     || '',
+  password: process.env.DB_PASS     || process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME     || 'bank',
+  ssl:      process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
   waitForConnections: true,
   connectionLimit:    20,
   queueLimit:         0,
   timezone:           '+05:30',        // IST
   charset:            'utf8mb4',
 });
+
 
 // Verify connectivity on startup
 pool.getConnection()

@@ -23,6 +23,7 @@ const Statement = () => {
     finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchStatement(); }, [year, month]);
 
   const downloadPdf = async () => {
@@ -30,10 +31,11 @@ const Statement = () => {
       const params = new URLSearchParams();
       if (pdfStart) params.append('startDate', pdfStart);
       if (pdfEnd)   params.append('endDate', pdfEnd);
-      const token = localStorage.getItem('jwtToken');
+      const token = localStorage.getItem('customerToken') || localStorage.getItem('jwtToken');
       const res = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:8081'}/customer/statement-pdf?${params}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = 'statement.pdf'; a.click();

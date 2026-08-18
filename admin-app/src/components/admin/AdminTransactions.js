@@ -8,7 +8,8 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import API from '../../services/api';
-import { formatCurrency, formatDate, getTxnColor } from '../../utils/format';
+import { formatCurrency, formatDate } from '../../utils/format';
+
 
 const AdminTransactions = () => {
   const [txns, setTxns] = useState([]);

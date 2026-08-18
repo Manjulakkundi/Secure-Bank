@@ -19,7 +19,8 @@ const AdminInvestments = () => {
 
   // Overview KPIs & Analytics State
   const [overview, setOverview] = useState(null);
-  const [overviewLoading, setOverviewLoading] = useState(true);
+  const [, setOverviewLoading] = useState(true);
+
 
   // Customer Table State (Server-Side Paginated & Sorted)
   const [customers, setCustomers] = useState([]);

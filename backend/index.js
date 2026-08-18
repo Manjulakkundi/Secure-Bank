@@ -27,15 +27,23 @@ const logsDir = path.join(__dirname, 'logs');
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+const getOrigins = (envVar, defaultOrigin) => {
+  if (!envVar) return [defaultOrigin];
+  return envVar.split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean);
+};
+
 const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
-  process.env.ADMIN_FRONTEND_URL || 'http://localhost:3001',
+  ...getOrigins(process.env.FRONTEND_URL, 'http://localhost:3000'),
+  ...getOrigins(process.env.ADMIN_FRONTEND_URL, 'http://localhost:3001'),
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    if (!origin) return callback(null, true);
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    if (ALLOWED_ORIGINS.includes(normalizedOrigin) || ALLOWED_ORIGINS.includes('*')) {
+      return callback(null, true);
+    }
     logger.warn(`CORS blocked request from origin: ${origin}`);
     return callback(new Error('Not allowed by CORS'));
   },
@@ -43,6 +51,7 @@ app.use(cors({
   allowedHeaders:['Content-Type', 'Authorization'],
   credentials:   true,
 }));
+
 
 // ─── Body Parsers ─────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10kb' }));
