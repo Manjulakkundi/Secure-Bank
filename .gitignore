@@ -15,8 +15,12 @@ customer-app/.env
 admin-app/.env
 
 # Logs
-backend/logs/*.log
+logs/
+**/logs/
+backend/logs/
+backend/logs/*
 *.log
+
 
 # Build outputs
 build/
