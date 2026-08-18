@@ -6,12 +6,9 @@
  */
 const db = require('../config/database');
 const { calculateActualRdMaturity } = require('../config/investmentRates');
-const {
-  sendFdMaturedEmail,
-  sendRdMonthlyReminderEmail,
-  sendRdMaturedEmail,
-} = require('./emailService');
+const emailService = require('./emailService');
 const logger = require('../utils/logger');
+
 
 let schedulerInterval = null;
 
@@ -85,8 +82,9 @@ const processFdMaturity = async () => {
         logger.info(`FD Matured: Account ${fd.account_id}, FD #${fd.id}, Credited ₹${maturityAmount}`);
 
         // 6. Send maturity email
-        sendFdMaturedEmail(custRows[0].customerEmail, custRows[0].customerName, fd)
+        emailService.sendFdMaturedEmail(custRows[0].customerEmail, custRows[0].customerName, fd)
           .catch((e) => logger.warn(`FD maturity email error: ${e.message}`));
+
       } catch (err) {
         await conn.rollback();
         logger.error(`Error maturing FD #${fd.id}: ${err.message}`);
@@ -190,8 +188,9 @@ const processRdMaturity = async () => {
         );
 
         // 8. Send RD maturity email
-        sendRdMaturedEmail(custRows[0].customerEmail, custRows[0].customerName, rd, actualCalc)
+        emailService.sendRdMaturedEmail(custRows[0].customerEmail, custRows[0].customerName, rd, actualCalc)
           .catch((e) => logger.warn(`RD maturity email error: ${e.message}`));
+
       } catch (err) {
         await conn.rollback();
         logger.error(`Error maturing RD #${rd.id}: ${err.message}`);
@@ -209,7 +208,7 @@ const processRdMaturity = async () => {
 
 /**
  * Check active RDs where next_due_date <= NOW() and dispatch one-time payment reminders.
- * GUARANTEES: Zero automatic balance deductions, zero duplicate reminder emails.
+ * GUARANTEES: Zero automatic balance deductions, zero duplicate reminder emails, strict customer data isolation.
  */
 const processRdReminders = async () => {
   try {
@@ -226,12 +225,40 @@ const processRdReminders = async () => {
 
     let remindersSent = 0;
     for (const rd of dueRds) {
-      const dueMonthNumber = parseInt(rd.contributions_completed, 10) + 1;
-      const totalExpected = parseInt(rd.total_contributions_expected, 10);
+      // 1. Validate Customer details existence (guarantee per-record isolation)
+      const customerEmail = rd.customerEmail ? rd.customerEmail.trim() : null;
+      const customerName = rd.customerName ? rd.customerName.trim() : null;
 
-      if (dueMonthNumber > totalExpected) continue;
+      if (!customerEmail || !customerEmail.includes('@') || !customerName) {
+        logger.error(`RD Reminder skipped for RD #${rd.id}: Missing or invalid customer details (Account: ${rd.account_id}, Email: ${customerEmail}, Name: ${customerName})`);
+        continue;
+      }
 
-      // Update reminder state to prevent duplicate dispatches
+      // 2. Validate RD numerical parameters
+      const contributionsCompleted = parseInt(rd.contributions_completed || 0, 10);
+      const totalExpected = parseInt(rd.total_contributions_expected || rd.tenure_months || 0, 10);
+      const dueMonthNumber = contributionsCompleted + 1;
+      const monthlyAmount = parseFloat(rd.monthly_amount);
+      const totalPaid = parseFloat(rd.total_amount_paid ?? 0);
+
+      if (isNaN(monthlyAmount) || monthlyAmount <= 0) {
+        logger.error(`RD Reminder skipped for RD #${rd.id}: Invalid monthly_amount (${rd.monthly_amount})`);
+        continue;
+      }
+
+      if (isNaN(totalExpected) || totalExpected < 1 || dueMonthNumber > totalExpected) {
+        logger.warn(`RD Reminder skipped for RD #${rd.id}: Contribution limit exceeded (Due: ${dueMonthNumber}, Total: ${totalExpected})`);
+        continue;
+      }
+
+      // 3. Validate next_due_date
+      const dueDateObj = new Date(rd.next_due_date);
+      if (!rd.next_due_date || isNaN(dueDateObj.getTime())) {
+        logger.error(`RD Reminder skipped for RD #${rd.id}: Invalid next_due_date (${rd.next_due_date})`);
+        continue;
+      }
+
+      // 4. Update reminder state in DB before sending to prevent duplicate dispatches
       await db.query(
         `UPDATE recurring_deposits SET 
           last_reminder_contribution_number=?,
@@ -241,11 +268,36 @@ const processRdReminders = async () => {
       );
 
       remindersSent++;
-      logger.info(`RD Reminder sent: Account ${rd.account_id}, RD #${rd.id}, Month #${dueMonthNumber}`);
+      logger.info(`RD Reminder sent: Account ${rd.account_id}, RD #${rd.id}, Month #${dueMonthNumber} of ${totalExpected}`);
 
-      // Dispatch reminder email
-      sendRdMonthlyReminderEmail(rd.customerEmail, rd.customerName, rd, dueMonthNumber)
-        .catch((e) => logger.warn(`RD reminder email error: ${e.message}`));
+      // 5. Construct isolated normalized RD payload
+      const normalizedRd = {
+        id: rd.id,
+        rdId: rd.id,
+        rd_id: rd.id,
+        account_id: rd.account_id,
+        monthlyAmount: monthlyAmount,
+        monthly_amount: monthlyAmount,
+        totalContributionsExpected: totalExpected,
+        total_contributions_expected: totalExpected,
+        tenureMonths: totalExpected,
+        tenure_months: totalExpected,
+        totalAmountPaid: isNaN(totalPaid) ? 0 : totalPaid,
+        total_amount_paid: isNaN(totalPaid) ? 0 : totalPaid,
+        contributionsCompleted: contributionsCompleted,
+        contributions_completed: contributionsCompleted,
+        nextDueDate: rd.next_due_date,
+        next_due_date: rd.next_due_date,
+        maturityDate: rd.maturity_date,
+        maturity_date: rd.maturity_date,
+        customerName: customerName,
+        customerEmail: customerEmail,
+      };
+
+      // 6. Dispatch reminder email strictly using this RD's customer details (Zero auto-debit)
+      emailService.sendRdMonthlyReminderEmail(customerEmail, customerName, normalizedRd, dueMonthNumber)
+        .catch((e) => logger.warn(`RD reminder email error for RD #${rd.id}: ${e.message}`));
+
     }
 
     return { remindersSent };
@@ -254,6 +306,7 @@ const processRdReminders = async () => {
     return { remindersSent: 0, error: err.message };
   }
 };
+
 
 /**
  * Execute a single complete cycle of the investment scheduler.

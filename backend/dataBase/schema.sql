@@ -44,8 +44,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   transaction_id  BIGINT       PRIMARY KEY AUTO_INCREMENT,
   sender_account  VARCHAR(14),
   receiver_account VARCHAR(14),
-  transaction_type ENUM('DEPOSIT','WITHDRAW','TRANSFER','RECEIVE','LOAN_APPROVED') NOT NULL,
+  transaction_type VARCHAR(30) NOT NULL,
   amount          DECIMAL(20,2) NOT NULL,
+
+
   status          ENUM('SUCCESS','FAILED','PENDING') DEFAULT 'SUCCESS',
   description     VARCHAR(255),
   balance_after   DECIMAL(20,2),

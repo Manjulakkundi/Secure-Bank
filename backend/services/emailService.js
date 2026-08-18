@@ -320,33 +320,42 @@ const sendFdCreatedEmail = async (toEmail, customerName, fd) => {
 
 /** Fixed Deposit Matured credit email */
 const sendFdMaturedEmail = async (toEmail, customerName, fd) => {
-  const { principalAmount, interestAmount, maturityAmount } = fd;
-  const html = wrap(`
-    <h2 style="color:#1E8449;margin-top:0">Your Fixed Deposit Has Matured 🎉</h2>
-    <p>Dear <strong>${customerName}</strong>,</p>
-    <p style="color:#555">Your Fixed Deposit has reached its maturity date. The maturity proceeds have been automatically credited to your core account.</p>
-    
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Principal Amount</td>
-        <td style="padding:12px">₹${parseFloat(principalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Interest Earned</td>
-        <td style="padding:12px;color:#1E8449;font-weight:bold">+₹${parseFloat(interestAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Total Maturity Credited</td>
-        <td style="padding:12px;color:#1A3C5E;font-size:20px;font-weight:bold">₹${parseFloat(maturityAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-    </table>
-
-    <p style="color:#555;font-size:13px">
-      The maturity amount has been credited to your SecureBank account. Your Fixed Deposit status is now MATURED.
-    </p>
-  `);
-
   try {
+    if (!toEmail || !toEmail.includes('@')) return;
+    const cleanCustomerName = (customerName || fd.customerName || fd.customer_name || 'Customer').trim();
+    const principal = parseFloat(fd.principalAmount ?? fd.principal_amount ?? 0);
+    const interest = parseFloat(fd.interestAmount ?? fd.interest_amount ?? 0);
+    const maturity = parseFloat(fd.maturityAmount ?? fd.maturity_amount ?? 0);
+
+    const formattedPrincipal = principal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const formattedInterest = interest.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const formattedMaturity = maturity.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const html = wrap(`
+      <h2 style="color:#1E8449;margin-top:0">Your Fixed Deposit Has Matured 🎉</h2>
+      <p>Dear <strong>${cleanCustomerName}</strong>,</p>
+      <p style="color:#555">Your Fixed Deposit has reached its maturity date. The maturity proceeds have been automatically credited to your core account.</p>
+      
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Principal Amount</td>
+          <td style="padding:12px">₹${formattedPrincipal}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Interest Earned</td>
+          <td style="padding:12px;color:#1E8449;font-weight:bold">+₹${formattedInterest}</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Total Maturity Credited</td>
+          <td style="padding:12px;color:#1A3C5E;font-size:20px;font-weight:bold">₹${formattedMaturity}</td>
+        </tr>
+      </table>
+
+      <p style="color:#555;font-size:13px">
+        The maturity amount has been credited to your SecureBank account. Your Fixed Deposit status is now MATURED.
+      </p>
+    `);
+
     await send(toEmail, 'SecureBank - Your Fixed Deposit Has Matured', html);
   } catch (err) {
     logger.warn(`FD matured email failed for ${toEmail}: ${err.message}`);
@@ -355,102 +364,160 @@ const sendFdMaturedEmail = async (toEmail, customerName, fd) => {
 
 /** Recurring Deposit Created confirmation email (States zero initial deduction) */
 const sendRdCreatedEmail = async (toEmail, customerName, rd) => {
-  const { monthlyAmount, tenureMonths, interestRate, totalScheduledDeposit, estimatedMaturityAmount, nextDueDate, maturityDate } = rd;
-  const dueStr = new Date(nextDueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-  const maturityStr = new Date(maturityDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-
-  const html = wrap(`
-    <h2 style="color:#1A3C5E;margin-top:0">Recurring Deposit Schedule Created ✅</h2>
-    <p>Dear <strong>${customerName}</strong>,</p>
-    <p style="color:#555">Your Recurring Deposit schedule has been successfully created.</p>
-
-    <div style="background:#eff6ff;border-left:4px solid #2563EB;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px;color:#1E40AF">
-      <strong>ℹ️ No Initial Deduction:</strong> No money was deducted from your account during creation. You will make your monthly contributions manually via the portal.
-    </div>
-
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Monthly Installment</td>
-        <td style="padding:12px;color:#1A3C5E;font-size:18px;font-weight:bold">₹${parseFloat(monthlyAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Tenure</td>
-        <td style="padding:12px">${tenureMonths} Months (${tenureMonths} Contributions)</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Interest Rate</td>
-        <td style="padding:12px;font-weight:bold;color:#0D9488">${parseFloat(interestRate).toFixed(2)}% p.a.</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Total Scheduled Deposit</td>
-        <td style="padding:12px">₹${parseFloat(totalScheduledDeposit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Estimated Maturity Value</td>
-        <td style="padding:12px;color:#1E8449;font-weight:bold">₹${parseFloat(estimatedMaturityAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Current Amount Paid</td>
-        <td style="padding:12px;font-weight:bold">₹0.00</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">First Installment Due</td>
-        <td style="padding:12px;font-weight:bold;color:#2563EB">${dueStr}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Maturity Date</td>
-        <td style="padding:12px">${maturityStr}</td>
-      </tr>
-    </table>
-  `);
-
   try {
+    if (!toEmail || !toEmail.includes('@')) return;
+    const cleanCustomerName = (customerName || rd.customerName || rd.customer_name || 'Customer').trim();
+    const monthlyAmount = parseFloat(rd.monthlyAmount ?? rd.monthly_amount ?? 0);
+    const tenureMonths = parseInt(rd.tenureMonths ?? rd.tenure_months ?? 0, 10);
+    const interestRate = parseFloat(rd.interestRate ?? rd.interest_rate ?? 0);
+    const totalScheduled = parseFloat(rd.totalScheduledDeposit ?? rd.total_scheduled_deposit ?? (monthlyAmount * tenureMonths));
+    const estimatedMaturity = parseFloat(rd.estimatedMaturityAmount ?? rd.estimated_maturity_amount ?? 0);
+    const rawDueDate = rd.nextDueDate ?? rd.next_due_date;
+    const rawMaturityDate = rd.maturityDate ?? rd.maturity_date;
+
+    const dueStr = rawDueDate && !isNaN(new Date(rawDueDate).getTime())
+      ? new Date(rawDueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
+      : 'Scheduled Next Month';
+    const maturityStr = rawMaturityDate && !isNaN(new Date(rawMaturityDate).getTime())
+      ? new Date(rawMaturityDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
+      : 'At Maturity';
+
+    const html = wrap(`
+      <h2 style="color:#1A3C5E;margin-top:0">Recurring Deposit Schedule Created ✅</h2>
+      <p>Dear <strong>${cleanCustomerName}</strong>,</p>
+      <p style="color:#555">Your Recurring Deposit schedule has been successfully created.</p>
+
+      <div style="background:#eff6ff;border-left:4px solid #2563EB;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px;color:#1E40AF">
+        <strong>ℹ️ No Initial Deduction:</strong> No money was deducted from your account during creation. You will make your monthly contributions manually via the portal.
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Monthly Installment</td>
+          <td style="padding:12px;color:#1A3C5E;font-size:18px;font-weight:bold">₹${monthlyAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Tenure</td>
+          <td style="padding:12px">${tenureMonths} Months (${tenureMonths} Contributions)</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Interest Rate</td>
+          <td style="padding:12px;font-weight:bold;color:#0D9488">${interestRate.toFixed(2)}% p.a.</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Total Scheduled Deposit</td>
+          <td style="padding:12px">₹${totalScheduled.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Estimated Maturity Value</td>
+          <td style="padding:12px;color:#1E8449;font-weight:bold">₹${estimatedMaturity.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Current Amount Paid</td>
+          <td style="padding:12px;font-weight:bold">₹0.00</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">First Installment Due</td>
+          <td style="padding:12px;font-weight:bold;color:#2563EB">${dueStr}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Maturity Date</td>
+          <td style="padding:12px">${maturityStr}</td>
+        </tr>
+      </table>
+    `);
+
     await send(toEmail, 'SecureBank - Recurring Deposit Created Successfully', html);
   } catch (err) {
     logger.warn(`RD created email failed for ${toEmail}: ${err.message}`);
   }
 };
 
+
 /** Recurring Deposit Monthly Reminder email (Zero deduction notice) */
 const sendRdMonthlyReminderEmail = async (toEmail, customerName, rd, dueMonthNumber) => {
-  const { id, monthlyAmount, totalContributionsExpected, totalAmountPaid, nextDueDate } = rd;
-  const dueStr = new Date(nextDueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-  const remainingCount = totalContributionsExpected - (dueMonthNumber - 1);
-
-  const html = wrap(`
-    <h2 style="color:#1A3C5E;margin-top:0">RD Monthly Contribution Due 📅</h2>
-    <p>Dear <strong>${customerName}</strong>,</p>
-    <p style="color:#555">Your monthly Recurring Deposit contribution is now due for <strong>RD #${id}</strong>.</p>
-
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Monthly Contribution Due</td>
-        <td style="padding:12px;color:#1A3C5E;font-size:18px;font-weight:bold">₹${parseFloat(monthlyAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Contribution Number</td>
-        <td style="padding:12px;font-weight:bold">${dueMonthNumber} of ${totalContributionsExpected}</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Due Date</td>
-        <td style="padding:12px;color:#C0392B;font-weight:bold">${dueStr}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Total Amount Paid So Far</td>
-        <td style="padding:12px">₹${parseFloat(totalAmountPaid).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Remaining Scheduled Contributions</td>
-        <td style="padding:12px">${remainingCount}</td>
-      </tr>
-    </table>
-
-    <div style="background:#fff8e1;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px;color:#92400E">
-      <strong>⚠️ Manual Payment Required:</strong> Please log in to SecureBank and make your RD contribution manually. Your account will <strong>NOT</strong> be automatically debited.
-    </div>
-  `);
-
   try {
+    // 1. Strict recipient & customer validation
+    if (!toEmail || typeof toEmail !== 'string' || !toEmail.includes('@')) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted: Invalid recipient email (${toEmail}) for RD #${rd?.id}`);
+      return;
+    }
+    const cleanCustomerName = (customerName || rd.customerName || rd.customer_name || 'Customer').trim();
+
+    // 2. Safe property resolution (supports both camelCase and snake_case)
+    const rdId = rd.id || rd.rdId || rd.rd_id || 'N/A';
+    const monthlyAmount = parseFloat(rd.monthlyAmount ?? rd.monthly_amount ?? 0);
+    const totalExpected = parseInt(rd.totalContributionsExpected ?? rd.total_contributions_expected ?? rd.tenureMonths ?? rd.tenure_months ?? 0, 10);
+    const totalPaid = parseFloat(rd.totalAmountPaid ?? rd.total_amount_paid ?? 0);
+    const rawDueDate = rd.nextDueDate ?? rd.next_due_date;
+    const contribNum = parseInt(dueMonthNumber ?? ((rd.contributionsCompleted ?? rd.contributions_completed ?? 0) + 1), 10);
+    const remainingCount = Math.max(0, totalExpected - (contribNum - 1));
+
+    // 3. Strict Pre-Send Data Validation (Prevent sending NaN / undefined / Invalid Date)
+    if (!Number.isFinite(monthlyAmount) || monthlyAmount <= 0) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid monthlyAmount (${monthlyAmount})`);
+      return;
+    }
+    if (!Number.isInteger(contribNum) || contribNum < 1) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid contributionNumber (${contribNum})`);
+      return;
+    }
+    if (!Number.isInteger(totalExpected) || totalExpected < 1) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid totalContributions (${totalExpected})`);
+      return;
+    }
+    if (!Number.isFinite(totalPaid) || totalPaid < 0) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid totalAmountPaid (${totalPaid})`);
+      return;
+    }
+    if (!Number.isInteger(remainingCount) || remainingCount < 0) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid remainingContributions (${remainingCount})`);
+      return;
+    }
+
+    const dueDateObj = new Date(rawDueDate);
+    if (!rawDueDate || isNaN(dueDateObj.getTime())) {
+      logger.error(`[EmailService] sendRdMonthlyReminderEmail aborted for RD #${rdId}: Invalid dueDate (${rawDueDate})`);
+      return;
+    }
+
+    const dueStr = dueDateObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+    const formattedMonthly = monthlyAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const formattedTotalPaid = totalPaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const html = wrap(`
+      <h2 style="color:#1A3C5E;margin-top:0">RD Monthly Contribution Due 📅</h2>
+      <p>Dear <strong>${cleanCustomerName}</strong>,</p>
+      <p style="color:#555">Your monthly Recurring Deposit contribution is now due for <strong>RD #${rdId}</strong>.</p>
+
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Monthly Contribution Due</td>
+          <td style="padding:12px;color:#1A3C5E;font-size:18px;font-weight:bold">₹${formattedMonthly}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Contribution Number</td>
+          <td style="padding:12px;font-weight:bold">${contribNum} of ${totalExpected}</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Due Date</td>
+          <td style="padding:12px;color:#C0392B;font-weight:bold">${dueStr}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Total Amount Paid So Far</td>
+          <td style="padding:12px">₹${formattedTotalPaid}</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Remaining Scheduled Contributions</td>
+          <td style="padding:12px">${remainingCount}</td>
+        </tr>
+      </table>
+
+      <div style="background:#fff8e1;border-left:4px solid #f59e0b;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px;color:#92400E">
+        <strong>⚠️ Manual Payment Required:</strong> Please log in to SecureBank and make your RD contribution manually. Your account will <strong>NOT</strong> be automatically debited.
+      </div>
+    `);
+
     await send(toEmail, 'SecureBank - RD Monthly Contribution Due', html);
   } catch (err) {
     logger.warn(`RD reminder email failed for ${toEmail}: ${err.message}`);
@@ -459,44 +526,51 @@ const sendRdMonthlyReminderEmail = async (toEmail, customerName, rd, dueMonthNum
 
 /** Recurring Deposit Contribution Confirmation email */
 const sendRdContributionEmail = async (toEmail, customerName, rd, contribData) => {
-  const { monthlyAmount, totalContributionsExpected, totalAmountPaid, nextDueDate } = rd;
-  const { contributionNumber, amount } = contribData;
-  const remainingCount = Math.max(0, totalContributionsExpected - contributionNumber);
-  const nextDueStr = nextDueDate
-    ? new Date(nextDueDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-    : 'Completed';
-
-  const html = wrap(`
-    <h2 style="color:#1E8449;margin-top:0">RD Contribution Successful ✅</h2>
-    <p>Dear <strong>${customerName}</strong>,</p>
-    <p style="color:#555">Your recurring deposit contribution has been successfully received and added to your RD balance.</p>
-
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Contribution Paid</td>
-        <td style="padding:12px;color:#1E8449;font-size:18px;font-weight:bold">₹${parseFloat(amount || monthlyAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Contribution Progress</td>
-        <td style="padding:12px;font-weight:bold">${contributionNumber} of ${totalContributionsExpected} Completed</td>
-      </tr>
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Total Principal Paid</td>
-        <td style="padding:12px;font-weight:bold">₹${parseFloat(totalAmountPaid).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Remaining Contributions</td>
-        <td style="padding:12px">${remainingCount}</td>
-      </tr>
-      ${remainingCount > 0 ? `
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Next Due Date</td>
-        <td style="padding:12px;font-weight:bold;color:#2563EB">${nextDueStr}</td>
-      </tr>` : ''}
-    </table>
-  `);
-
   try {
+    if (!toEmail || !toEmail.includes('@')) return;
+    const cleanCustomerName = (customerName || rd.customerName || 'Customer').trim();
+    const monthlyAmount = parseFloat(rd.monthlyAmount ?? rd.monthly_amount ?? 0);
+    const totalContributionsExpected = parseInt(rd.totalContributionsExpected ?? rd.total_contributions_expected ?? rd.tenureMonths ?? rd.tenure_months ?? 0, 10);
+    const totalAmountPaid = parseFloat(rd.totalAmountPaid ?? rd.total_amount_paid ?? 0);
+    const rawNextDue = rd.nextDueDate ?? rd.next_due_date;
+
+    const contributionNumber = parseInt(contribData.contributionNumber ?? contribData.contribution_number ?? 0, 10);
+    const amount = parseFloat(contribData.amount ?? monthlyAmount);
+    const remainingCount = Math.max(0, totalContributionsExpected - contributionNumber);
+    const nextDueStr = rawNextDue && !isNaN(new Date(rawNextDue).getTime())
+      ? new Date(rawNextDue).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
+      : 'Completed';
+
+    const html = wrap(`
+      <h2 style="color:#1E8449;margin-top:0">RD Contribution Successful ✅</h2>
+      <p>Dear <strong>${cleanCustomerName}</strong>,</p>
+      <p style="color:#555">Your recurring deposit contribution has been successfully received and added to your RD balance.</p>
+
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Contribution Paid</td>
+          <td style="padding:12px;color:#1E8449;font-size:18px;font-weight:bold">₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Contribution Progress</td>
+          <td style="padding:12px;font-weight:bold">${contributionNumber} of ${totalContributionsExpected} Completed</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Total Principal Paid</td>
+          <td style="padding:12px;font-weight:bold">₹${totalAmountPaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Remaining Contributions</td>
+          <td style="padding:12px">${remainingCount}</td>
+        </tr>
+        ${remainingCount > 0 ? `
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Next Due Date</td>
+          <td style="padding:12px;font-weight:bold;color:#2563EB">${nextDueStr}</td>
+        </tr>` : ''}
+      </table>
+    `);
+
     await send(toEmail, 'SecureBank - RD Contribution Successful', html);
   } catch (err) {
     logger.warn(`RD contribution email failed for ${toEmail}: ${err.message}`);
@@ -505,44 +579,52 @@ const sendRdContributionEmail = async (toEmail, customerName, rd, contribData) =
 
 /** Recurring Deposit Matured credit email (Uses actual payout numbers) */
 const sendRdMaturedEmail = async (toEmail, customerName, rd, actualMaturityData) => {
-  const { totalContributionsExpected, contributionsCompleted, contributionsMissed, totalAmountPaid, actualInterestEarned, actualMaturityAmount } = actualMaturityData;
-
-  const html = wrap(`
-    <h2 style="color:#1E8449;margin-top:0">Your Recurring Deposit Has Matured 🎉</h2>
-    <p>Dear <strong>${customerName}</strong>,</p>
-    <p style="color:#555">Your Recurring Deposit has reached maturity. Your maturity proceeds calculated from your actual verified contributions have been credited to your core account.</p>
-
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Total Actual Contributions Paid</td>
-        <td style="padding:12px">₹${parseFloat(totalAmountPaid).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${contributionsCompleted} / ${totalContributionsExpected})</td>
-      </tr>
-      ${contributionsMissed > 0 ? `
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Missed/Unpaid Contributions</td>
-        <td style="padding:12px;color:#C0392B">${contributionsMissed}</td>
-      </tr>` : ''}
-      <tr style="background:#f0f7ff">
-        <td style="padding:12px;font-weight:bold;color:#555">Actual Interest Earned</td>
-        <td style="padding:12px;color:#1E8449;font-weight:bold">+₹${parseFloat(actualInterestEarned).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-      <tr>
-        <td style="padding:12px;font-weight:bold;color:#555">Total Maturity Credited</td>
-        <td style="padding:12px;color:#1A3C5E;font-size:20px;font-weight:bold">₹${parseFloat(actualMaturityAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-      </tr>
-    </table>
-
-    <p style="color:#555;font-size:13px">
-      The maturity proceeds have been credited to your SecureBank account and your Recurring Deposit is now MATURED.
-    </p>
-  `);
-
   try {
+    if (!toEmail || !toEmail.includes('@')) return;
+    const cleanCustomerName = (customerName || rd.customerName || 'Customer').trim();
+    const totalExpected = parseInt(actualMaturityData.totalContributionsExpected ?? rd.total_contributions_expected ?? rd.tenure_months ?? 0, 10);
+    const completed = parseInt(actualMaturityData.contributionsCompleted ?? rd.contributions_completed ?? 0, 10);
+    const missed = parseInt(actualMaturityData.contributionsMissed ?? Math.max(0, totalExpected - completed), 10);
+    const totalPaid = parseFloat(actualMaturityData.totalAmountPaid ?? rd.total_amount_paid ?? 0);
+    const interestEarned = parseFloat(actualMaturityData.actualInterestEarned ?? 0);
+    const maturityAmount = parseFloat(actualMaturityData.actualMaturityAmount ?? totalPaid);
+
+    const html = wrap(`
+      <h2 style="color:#1E8449;margin-top:0">Your Recurring Deposit Has Matured 🎉</h2>
+      <p>Dear <strong>${cleanCustomerName}</strong>,</p>
+      <p style="color:#555">Your Recurring Deposit has reached maturity. Your maturity proceeds calculated from your actual verified contributions have been credited to your core account.</p>
+
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Total Actual Contributions Paid</td>
+          <td style="padding:12px">₹${totalPaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${completed} / ${totalExpected})</td>
+        </tr>
+        ${missed > 0 ? `
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Missed/Unpaid Contributions</td>
+          <td style="padding:12px;color:#C0392B">${missed}</td>
+        </tr>` : ''}
+        <tr style="background:#f0f7ff">
+          <td style="padding:12px;font-weight:bold;color:#555">Actual Interest Earned</td>
+          <td style="padding:12px;color:#1E8449;font-weight:bold">+₹${interestEarned.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px;font-weight:bold;color:#555">Total Maturity Credited</td>
+          <td style="padding:12px;color:#1A3C5E;font-size:20px;font-weight:bold">₹${maturityAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        </tr>
+      </table>
+
+      <p style="color:#555;font-size:13px">
+        The maturity proceeds have been credited to your SecureBank account and your Recurring Deposit is now MATURED.
+      </p>
+    `);
+
     await send(toEmail, 'SecureBank - Your Recurring Deposit Has Matured', html);
   } catch (err) {
     logger.warn(`RD matured email failed for ${toEmail}: ${err.message}`);
   }
 };
+
 
 // Keep old export name for backward compatibility
 const sendTransferNotification = sendTransactionEmail;
