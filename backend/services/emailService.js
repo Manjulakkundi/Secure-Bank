@@ -1,23 +1,10 @@
 /**
  * services/emailService.js
- * Nodemailer wrapper for all SecureBank emails.
+ * Centralized email service for SecureBank.
+ * Powered by services/mailer.js (pooled SMTP with timeout protection and structured logging).
  */
-const nodemailer = require('nodemailer');
+const { sendMailAsync, getTransporter, verifyMailConnection, enqueueEmail } = require('./mailer');
 const logger = require('../utils/logger');
-
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT || '587', 10),
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER || process.env.SMTP_USER,
-    pass: process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS,
-  },
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-});
-
 
 const BASE_HEADER = `
   <div style="background:#1A3C5E;padding:24px;text-align:center">
@@ -36,20 +23,10 @@ const wrap = (body) => `
     ${BASE_FOOTER}
   </div>`;
 
-const send = async (to, subject, html) => {
-  try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
-      to, subject, html,
-    });
-    logger.info(`Email sent to ${to}: ${subject}`);
-    return true;
-  } catch (err) {
-    logger.error(`Email failed to ${to}: ${err.message}`);
-    // Non-critical for financial execution — caller handles
-    return false;
-  }
+const send = async (to, subject, html, type = 'general') => {
+  return await sendMailAsync({ to, subject, html, type });
 };
+
 
 /** OTP email (SIGNUP or PASSWORD_RESET) */
 const sendOtpEmail = async (toEmail, otp, purpose = 'SIGNUP') => {
@@ -647,4 +624,9 @@ module.exports = {
   sendRdMonthlyReminderEmail,
   sendRdContributionEmail,
   sendRdMaturedEmail,
+  send,
+  enqueueEmail,
+  verifyMailConnection,
+  getTransporter,
 };
+

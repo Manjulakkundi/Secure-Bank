@@ -1,22 +1,12 @@
 /**
  * services/notificationService.js
  * Centralized notification service for SecureBank.
+ * Powered by services/mailer.js (pooled SMTP with timeout protection and structured logging).
  * All methods are non-blocking — callers use .catch() to swallow errors.
  * Every notification is HTML-formatted and matches real banking email standards.
  */
-const nodemailer = require('nodemailer');
+const { sendMailAsync, enqueueEmail } = require('./mailer');
 const logger = require('../utils/logger');
-
-const transporter = nodemailer.createTransport({
-  host:   process.env.EMAIL_HOST   || process.env.SMTP_HOST || 'smtp.gmail.com',
-  port:   parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT || '587', 10),
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER || process.env.SMTP_USER,
-    pass: process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS,
-  },
-});
-
 
 // ─── Template helpers ─────────────────────────────────────────────────────────
 const fmt = (n) =>
@@ -59,16 +49,11 @@ const infoRow = (label, value, highlight = false, color = '#333') => `
     <td style="padding:11px 14px;color:${color};font-size:13px;border-bottom:1px solid #f0f0f0;font-weight:${highlight ? 700 : 400}">${value}</td>
   </tr>`;
 
-/** Send any email — internal helper */
-const _send = async (to, subject, html) => {
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
-    to,
-    subject,
-    html,
-  });
-  logger.info(`[Notification] Email sent → ${to} | ${subject}`);
+/** Send any notification email with type tracking */
+const _send = async (to, subject, html, type = 'notification') => {
+  return await sendMailAsync({ to, subject, html, type });
 };
+
 
 // ─── A. Deposit Notification ──────────────────────────────────────────────────
 /**
@@ -113,7 +98,7 @@ const sendDepositEmail = async (p) => {
     </p>
   `);
 
-  await _send(p.toEmail, 'Money Deposited Successfully — SecureBank', html);
+  await _send(p.toEmail, 'Money Deposited Successfully — SecureBank', html, 'deposit');
 };
 
 // ─── B. Withdrawal Notification ───────────────────────────────────────────────
@@ -161,7 +146,7 @@ const sendWithdrawEmail = async (p) => {
     </div>
   `);
 
-  await _send(p.toEmail, 'Cash Withdrawal Successful — SecureBank', html);
+  await _send(p.toEmail, 'Cash Withdrawal Successful — SecureBank', html, 'withdrawal');
 };
 
 // ─── C. Transfer Notification (Sender) ───────────────────────────────────────
@@ -182,7 +167,7 @@ const sendTransferSentEmail = async (p) => {
       ${infoRow('Date & Time', dateStr(), true)}
     </table>
   `);
-  await _send(p.toEmail, 'Money Transfer Successful — SecureBank', html);
+  await _send(p.toEmail, 'Money Transfer Successful — SecureBank', html, 'transfer_sent');
 };
 
 // ─── D. Transfer Notification (Receiver) ─────────────────────────────────────
@@ -203,7 +188,7 @@ const sendTransferReceivedEmail = async (p) => {
       ${infoRow('Date & Time', dateStr(), true)}
     </table>
   `);
-  await _send(p.toEmail, 'Money Received — SecureBank', html);
+  await _send(p.toEmail, 'Money Received — SecureBank', html, 'transfer_received');
 };
 
 // ─── E. Loan Approved Notification ───────────────────────────────────────────
@@ -235,7 +220,7 @@ const sendLoanApprovedEmail = async (p) => {
       </p>
     </div>
   `);
-  await _send(p.toEmail, 'Loan Approved — SecureBank', html);
+  await _send(p.toEmail, 'Loan Approved — SecureBank', html, 'loan_approved');
 };
 
 // ─── F. Loan Rejected Notification ───────────────────────────────────────────
@@ -262,7 +247,7 @@ const sendLoanRejectedEmail = async (p) => {
       Thank you for banking with SecureBank.
     </p>
   `);
-  await _send(p.toEmail, 'Loan Application Update — SecureBank', html);
+  await _send(p.toEmail, 'Loan Application Update — SecureBank', html, 'loan_rejected');
 };
 
 // ─── G. Account Freeze Notification ──────────────────────────────────────────
@@ -291,7 +276,7 @@ const sendFreezeEmail = async (p) => {
       </p>
     </div>
   `);
-  await _send(p.toEmail, 'Account Temporarily Frozen — SecureBank', html);
+  await _send(p.toEmail, 'Account Temporarily Frozen — SecureBank', html, 'account_freeze');
 };
 
 // ─── H. Account Unfreeze Notification ────────────────────────────────────────
@@ -318,8 +303,9 @@ const sendUnfreezeEmail = async (p) => {
       Welcome back! Thank you for banking with SecureBank.
     </p>
   `);
-  await _send(p.toEmail, 'Account Reactivated — SecureBank', html);
+  await _send(p.toEmail, 'Account Reactivated — SecureBank', html, 'account_unfreeze');
 };
+
 
 module.exports = {
   sendDepositEmail,

@@ -82,10 +82,31 @@ app.use(limiter);
 app.use('/customer/login', loginLimiter);
 app.use('/admin/login',    loginLimiter);
 
+const { verifyMailConnection } = require('./services/mailer');
+
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({ success: true, message: 'SecureBank API is running', timestamp: new Date().toISOString() });
 });
+
+app.get('/health/email', async (req, res) => {
+  try {
+    const status = await verifyMailConnection();
+    const statusCode = status.configured && status.status === 'CONNECTED' ? 200 : (status.configured ? 503 : 200);
+    res.status(statusCode).json({
+      success: status.status === 'CONNECTED',
+      timestamp: new Date().toISOString(),
+      ...status,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      timestamp: new Date().toISOString(),
+      error: err.message,
+    });
+  }
+});
+
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/customer', customerRoutes);

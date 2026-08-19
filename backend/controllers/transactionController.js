@@ -6,7 +6,7 @@ const db = require('../config/database');
 const { sendSuccess, sendBadRequest, sendNotFound, sendError } = require('../utils/response');
 const { logAudit, ACTIONS } = require('../middleware/auditLogger');
 const { evaluateTransaction, saveFraudAlert } = require('../services/fraudService');
-const { sendTransferSentEmail, sendTransferReceivedEmail } = require('../services/notificationService');
+const { sendTransferSentEmail, sendTransferReceivedEmail, sendWithdrawEmail } = require('../services/notificationService');
 const { generateStatement } = require('../services/pdfService');
 const logger = require('../utils/logger');
 
@@ -40,11 +40,24 @@ const withdraw = async (req, res, next) => {
 
     await conn.commit();
 
+    // Send withdrawal email notification asynchronously (non-blocking)
+    if (rows[0].customerEmail) {
+      sendWithdrawEmail({
+        toEmail:       rows[0].customerEmail,
+        customerName:  rows[0].customerName,
+        accountNumber,
+        amount,
+        newBalance,
+        description:   `Withdrawal of ₹${amount}`,
+      }).catch((e) => logger.warn(`Withdrawal email failed: ${e.message}`));
+    }
+
     await logAudit(accountNumber, ACTIONS.WITHDRAW,
       `Withdrew ₹${amount}. New balance: ₹${newBalance}`, req.ip);
     logger.info(`Withdraw: ${accountNumber} ₹${amount}`);
 
     return sendSuccess(res, { newBalance, transactionId: txnResult.insertId }, 'Withdrawal successful');
+
   } catch (err) {
     await conn.rollback();
     next(err);
