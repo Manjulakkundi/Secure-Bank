@@ -82,7 +82,7 @@ app.use(limiter);
 app.use('/customer/login', loginLimiter);
 app.use('/admin/login',    loginLimiter);
 
-const { verifyMailConnection } = require('./services/mailer');
+const { verifyMailConnection, resolveMailConfig } = require('./services/mailer');
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -107,7 +107,6 @@ app.get('/health/email', async (req, res) => {
   }
 });
 
-
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/customer', customerRoutes);
 app.use('/admin',    adminRoutes);
@@ -123,10 +122,13 @@ if (require.main === module) {
   const PORT = process.env.PORT || 8081;
   app.listen(PORT, () => {
     logger.info(`✅ SecureBank API running on port ${PORT} [${process.env.NODE_ENV}]`);
+    const mailConfig = resolveMailConfig();
+    logger.info(`📧 Mailer initialized: provider=${mailConfig.provider} transport=${mailConfig.type} port=${mailConfig.port} secure=${mailConfig.secure}`);
     // Start background investment maturity & reminder scheduler (runs every 60s)
     investmentScheduler.startScheduler(60000);
   });
 }
+
 
 
 module.exports = app; // exported for Jest/Supertest

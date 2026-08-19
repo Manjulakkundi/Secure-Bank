@@ -2,14 +2,15 @@
  * tests/emailSystemIntegration.js
  * Standalone, fast integration test suite for SecureBank email notification system.
  * Tests:
- *  1. Mailer configuration (pooling, SSL port 465, timeouts)
- *  2. Privacy-safe email masking
- *  3. Simulated successful dispatch
- *  4. Simulated Connection Timeout (ETIMEDOUT) & error isolation
- *  5. Simulated Auth Failure & error isolation
- *  6. All customer and admin email templates
- *  7. Non-blocking async queue
- *  8. Email health check verification
+ *  1. Configuration Resolution & Port 465 SSL Normalization (Overrides legacy 587 for Gmail)
+ *  2. HTTP Transactional API Mode (Resend / Brevo)
+ *  3. Privacy-safe email masking
+ *  4. Mock Transporter Pooled Dispatch & Duration tracking
+ *  5. Simulated Connection Timeout (ETIMEDOUT) & error isolation
+ *  6. Simulated SMTP Auth Failure (EAUTH) & error isolation
+ *  7. All 15 customer and admin email templates
+ *  8. Non-blocking async queue
+ *  9. Email health check verification endpoint
  */
 const assert = require('assert');
 const mailer = require('../services/mailer');
@@ -21,8 +22,33 @@ async function runEmailTests() {
   console.log('🧪 RUNNING SECUREBANK EMAIL SYSTEM INTEGRATION TEST SUITE');
   console.log('===============================================================');
 
-  // ─── 1. Email Masking & Privacy ───────────────────────────────────────────
-  console.log('\n─── TEST 1: Privacy-Safe Email Masking ───');
+  // ─── 1. Configuration Resolution & Normalization ──────────────────────────
+  console.log('\n─── TEST 1: Gmail Port 465 + Direct SSL Normalization ───');
+  delete process.env.RESEND_API_KEY;
+  delete process.env.BREVO_API_KEY;
+  delete process.env.EMAIL_FORCE_PORT;
+  process.env.EMAIL_HOST = 'smtp.gmail.com';
+  process.env.EMAIL_PORT = '587'; // Legacy env var present on Render
+
+  const gmailConfig = mailer.resolveMailConfig();
+  assert.strictEqual(gmailConfig.port, 465, 'Gmail host must automatically normalize to port 465');
+  assert.strictEqual(gmailConfig.secure, true, 'Gmail host must automatically enforce secure: true');
+  assert.strictEqual(gmailConfig.type, 'smtp');
+  console.log('✅ PASS: Legacy EMAIL_PORT=587 successfully normalized to Port 465 (SSL) for Gmail');
+
+  // ─── 2. HTTP API Resolution ───────────────────────────────────────────────
+  console.log('\n─── TEST 2: HTTP Transactional API Resolution (Resend) ───');
+  process.env.RESEND_API_KEY = 're_test_key_12345';
+  const apiConfig = mailer.resolveMailConfig();
+  assert.strictEqual(apiConfig.type, 'api');
+  assert.strictEqual(apiConfig.provider, 'resend');
+  assert.strictEqual(apiConfig.port, 443);
+  assert.strictEqual(apiConfig.secure, true);
+  delete process.env.RESEND_API_KEY;
+  console.log('✅ PASS: RESEND_API_KEY seamlessly routes through HTTPS port 443 API');
+
+  // ─── 3. Email Masking & Privacy ───────────────────────────────────────────
+  console.log('\n─── TEST 3: Privacy-Safe Email Masking ───');
   const masked1 = mailer.maskEmail('manjulakkundi1234@gmail.com');
   assert.ok(masked1.startsWith('m') && masked1.endsWith('4@gmail.com'), `Masked format invalid: ${masked1}`);
   assert.strictEqual(mailer.maskEmail('ab@example.com'), 'a*@example.com');
@@ -31,8 +57,8 @@ async function runEmailTests() {
   assert.strictEqual(mailer.maskEmail('invalid-email'), 'invalid');
   console.log('✅ PASS: Email masking produces secure, unexposed log strings');
 
-  // ─── 2. Mock Transporter Dispatch & Verification ──────────────────────────
-  console.log('\n─── TEST 2: High-Performance Pooled Dispatch ───');
+  // ─── 4. Mock Transporter Dispatch & Verification ──────────────────────────
+  console.log('\n─── TEST 4: High-Performance Pooled Dispatch ───');
   let sentMessages = [];
   const mockTransporter = {
     sendMail: async (opts) => {
@@ -42,7 +68,6 @@ async function runEmailTests() {
     verify: async () => true,
   };
 
-  // Set mock transporter
   mailer.setTransporter(mockTransporter);
 
   const sendResult = await mailer.sendMailAsync({
@@ -57,9 +82,8 @@ async function runEmailTests() {
   assert.strictEqual(sentMessages[0].to, 'customer@securebank.com');
   console.log('✅ PASS: Email dispatched via mailer engine with duration metrics');
 
-
-  // ─── 3. Connection Timeout Simulation (ETIMEDOUT) ─────────────────────────
-  console.log('\n─── TEST 3: Connection Timeout Simulation (ETIMEDOUT) ───');
+  // ─── 5. Connection Timeout Simulation (ETIMEDOUT) ─────────────────────────
+  console.log('\n─── TEST 5: Connection Timeout Simulation (ETIMEDOUT) ───');
   mockTransporter.sendMail = async () => {
     const timeoutErr = new Error('Connection timeout');
     timeoutErr.code = 'ETIMEDOUT';
@@ -76,8 +100,8 @@ async function runEmailTests() {
   assert.strictEqual(timeoutResult, false, 'sendMailAsync must return false on connection timeout without throwing');
   console.log('✅ PASS: Connection timeout caught gracefully; banking flow remains intact');
 
-  // ─── 4. Auth Failure Simulation (EAUTH) ───────────────────────────────────
-  console.log('\n─── TEST 4: SMTP Auth Failure Simulation (EAUTH) ───');
+  // ─── 6. Auth Failure Simulation (EAUTH) ───────────────────────────────────
+  console.log('\n─── TEST 6: SMTP Auth Failure Simulation (EAUTH) ───');
   mockTransporter.sendMail = async () => {
     const authErr = new Error('Invalid login: 535-5.7.8 Username and Password not accepted');
     authErr.code = 'EAUTH';
@@ -94,8 +118,8 @@ async function runEmailTests() {
   assert.strictEqual(authResult, false, 'sendMailAsync must return false on auth failure without throwing');
   console.log('✅ PASS: SMTP auth error safely handled; no unhandled rejections');
 
-  // ─── 5. All Email Templates & Notification Types ──────────────────────────
-  console.log('\n─── TEST 5: Verification of All 15 Email Types ───');
+  // ─── 7. All Email Templates & Notification Types ──────────────────────────
+  console.log('\n─── TEST 7: Verification of All 15 Email Types ───');
   sentMessages = [];
   mockTransporter.sendMail = async (opts) => {
     sentMessages.push(opts);
@@ -136,31 +160,30 @@ async function runEmailTests() {
   assert.strictEqual(sentMessages.length, 15, `Expected 15 emails to be sent, got ${sentMessages.length}`);
   console.log('✅ PASS: All 15 email and notification types generated and dispatched properly');
 
-  // ─── 6. Non-Blocking Async Queue Execution ────────────────────────────────
-  console.log('\n─── TEST 6: Non-Blocking Async Queue ───');
+  // ─── 8. Non-Blocking Async Queue Execution ────────────────────────────────
+  console.log('\n─── TEST 8: Non-Blocking Async Queue ───');
   let asyncExecuted = false;
   mailer.enqueueEmail(async () => {
     asyncExecuted = true;
   });
-  // Wait a tick for setImmediate
   await new Promise((r) => setTimeout(r, 50));
   assert.strictEqual(asyncExecuted, true, 'enqueueEmail must execute task in background');
   console.log('✅ PASS: Non-blocking async queue executed task without blocking caller');
 
-  // ─── 7. Health Check Verification ─────────────────────────────────────────
-  console.log('\n─── TEST 7: Mail Connection Verification ───');
+  // ─── 9. Health Check Verification ─────────────────────────────────────────
+  console.log('\n─── TEST 9: Mail Connection Verification ───');
   process.env.EMAIL_USER = 'test@securebank.com';
   process.env.EMAIL_PASS = 'pass123';
   const healthStatus = await mailer.verifyMailConnection();
   assert.strictEqual(healthStatus.status, 'CONNECTED');
   assert.strictEqual(healthStatus.configured, true);
+  assert.strictEqual(healthStatus.port, 465);
+  assert.strictEqual(healthStatus.secure, true);
   assert.strictEqual(healthStatus.password, undefined);
   assert.strictEqual(healthStatus.pass, undefined);
   console.log('✅ PASS: verifyMailConnection returned connected status with zero secrets leaked');
 
-  // Reset transporter instance
   mailer.resetTransporter();
-
 
   console.log('\n===============================================================');
   console.log('🎉 ALL EMAIL SYSTEM TESTS PASSED SUCCESSFULLY (0 FAILURES)');
