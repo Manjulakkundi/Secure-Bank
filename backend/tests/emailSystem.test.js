@@ -354,14 +354,35 @@ describe('─── 4. Health Check Endpoints ───', () => {
   });
 
   it('GET /health/email returns 200 when SMTP connection is verified', async () => {
+    delete process.env.EMAIL_PROVIDER;
+    delete process.env.RESEND_API_KEY;
     mockVerify.mockResolvedValueOnce(true);
 
     const res = await request(app).get('/health/email');
     expect(res.statusCode).toBe(200);
-    expect(res.body.status).toBe('CONNECTED');
-    expect(res.body.provider).toBe('smtp.gmail.com');
+    expect(res.body.success).toBe(true);
+    expect(res.body.status).toBe('OK');
     // Ensure no secrets are leaked
     expect(res.body.password).toBeUndefined();
     expect(res.body.pass).toBeUndefined();
+    expect(res.body.apiKey).toBeUndefined();
   });
+
+  it('GET /health/email returns 200 when HTTP Resend provider is active', async () => {
+    process.env.EMAIL_PROVIDER = 'resend';
+    process.env.RESEND_API_KEY = 're_test_key_12345';
+    mailer.setHttpSender(async () => 'mock-resend-id');
+
+    const res = await request(app).get('/health/email');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.status).toBe('OK');
+    expect(res.body.provider).toBe('resend');
+    expect(res.body.transport).toBe('https');
+    expect(res.body.apiKey).toBeUndefined();
+
+    mailer.resetHttpSender();
+  });
+
 });
+

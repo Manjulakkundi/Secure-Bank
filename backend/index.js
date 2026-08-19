@@ -92,9 +92,8 @@ app.get('/health', (req, res) => {
 app.get('/health/email', async (req, res) => {
   try {
     const status = await verifyMailConnection();
-    const statusCode = status.configured && status.status === 'CONNECTED' ? 200 : (status.configured ? 503 : 200);
+    const statusCode = status.success ? 200 : (status.configured ? 503 : 200);
     res.status(statusCode).json({
-      success: status.status === 'CONNECTED',
       timestamp: new Date().toISOString(),
       ...status,
     });
@@ -123,11 +122,12 @@ if (require.main === module) {
   app.listen(PORT, () => {
     logger.info(`✅ SecureBank API running on port ${PORT} [${process.env.NODE_ENV}]`);
     const mailConfig = resolveMailConfig();
-    logger.info(`📧 Mailer initialized: provider=${mailConfig.provider} transport=${mailConfig.type} port=${mailConfig.port} secure=${mailConfig.secure}`);
+    logger.info(`📧 Mailer initialized: provider=${mailConfig.provider} transport=${mailConfig.transport} port=${mailConfig.port} secure=${mailConfig.secure}`);
     // Start background investment maturity & reminder scheduler (runs every 60s)
     investmentScheduler.startScheduler(60000);
   });
 }
+
 
 
 

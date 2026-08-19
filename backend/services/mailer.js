@@ -1,12 +1,12 @@
 /**
  * services/mailer.js
- * Production-hardened, dual-engine mail transport system for SecureBank.
+ * Production-hardened, multi-provider email system for SecureBank.
  * Supports:
- *  1. Direct SSL SMTP on Port 465 (secure: true, connection pooling) for Gmail and custom SMTP.
- *  2. HTTP Transactional API over HTTPS Port 443 (Resend / Brevo) as a guaranteed cloud fallback.
- *  3. Safe port normalization: Prevents legacy EMAIL_PORT=587 from breaking Gmail SSL on Render.
- *  4. Fast connection timeouts (5000ms max) and non-blocking async execution.
- *  5. Complete safety: Never exposes secrets; banking operations always succeed regardless of email status.
+ *  1. HTTP Transactional Email APIs over HTTPS/443 (Resend / Brevo) — 100% reliable in cloud environments like Render.
+ *  2. Direct SSL SMTP on Port 465 (secure: true, connection pooling) as a fallback / local development option.
+ *  3. Explicit provider selection via EMAIL_PROVIDER (resend | brevo | smtp).
+ *  4. Fast timeouts (5000ms max) and non-blocking asynchronous queue (enqueueEmail).
+ *  5. Complete safety: Never exposes secrets, passwords, or API keys; banking transactions always succeed.
  */
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
@@ -24,37 +24,44 @@ const maskEmail = (email) => {
 };
 
 /**
- * Resolves optimal mailer configuration based on environment variables.
- * Intelligently forces Port 465 + SSL for Gmail unless explicitly overridden with EMAIL_FORCE_PORT=true.
+ * Resolves active mail provider configuration based on environment variables.
+ * Priority:
+ *  1. Explicit EMAIL_PROVIDER=resend OR RESEND_API_KEY
+ *  2. Explicit EMAIL_PROVIDER=brevo OR BREVO_API_KEY
+ *  3. Explicit EMAIL_PROVIDER=smtp OR EMAIL_USER / EMAIL_PASS
  */
 const resolveMailConfig = () => {
-  // Check for HTTP Transactional API keys first (Resend / Brevo)
-  const resendApiKey = process.env.RESEND_API_KEY || process.env.RESEND_KEY;
-  const brevoApiKey = process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY;
+  const provider = (process.env.EMAIL_PROVIDER || '').trim().toLowerCase();
+  const resendApiKey = (process.env.RESEND_API_KEY || process.env.RESEND_KEY || '').trim();
+  const brevoApiKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim();
 
-  if (resendApiKey) {
+  // 1. Resend HTTP API (Primary production choice for Render HTTPS/443)
+  if (provider === 'resend' || (resendApiKey && provider !== 'smtp' && provider !== 'brevo')) {
     return {
-      type: 'api',
+      type: 'http',
       provider: 'resend',
-      apiKey: resendApiKey,
+      transport: 'https',
       port: 443,
       secure: true,
+      apiKey: resendApiKey,
       from: process.env.EMAIL_FROM || '"SecureBank" <onboarding@resend.dev>',
     };
   }
 
-  if (brevoApiKey) {
+  // 2. Brevo HTTP API
+  if (provider === 'brevo' || (brevoApiKey && provider !== 'smtp' && provider !== 'resend')) {
     return {
-      type: 'api',
+      type: 'http',
       provider: 'brevo',
-      apiKey: brevoApiKey,
+      transport: 'https',
       port: 443,
       secure: true,
+      apiKey: brevoApiKey,
       from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
     };
   }
 
-  // SMTP Transport configuration
+  // 3. SMTP Transport (Fallback / Local development)
   const host = (process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
   const user = (process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
   const pass = (process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').trim();
@@ -67,8 +74,6 @@ const resolveMailConfig = () => {
     port = parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT, 10);
     secure = process.env.EMAIL_SECURE === 'true' || port === 465;
   } else if (isGmail) {
-    // On cloud platforms like Render, Port 465 with direct SSL (secure: true) is mandatory
-    // for Gmail because Port 587 STARTTLS connections hang or get dropped by cloud firewalls.
     port = 465;
     secure = true;
   } else {
@@ -79,7 +84,8 @@ const resolveMailConfig = () => {
 
   return {
     type: 'smtp',
-    provider: host,
+    provider: isGmail ? 'gmail' : host,
+    transport: 'smtp',
     host,
     port,
     secure,
@@ -90,8 +96,9 @@ const resolveMailConfig = () => {
 };
 
 let transporterInstance = null;
+let customHttpSender = null;
 
-/** Create or retrieve the singleton pooled Nodemailer transporter */
+/** Create or retrieve the singleton pooled Nodemailer transporter for SMTP fallback */
 const getTransporter = () => {
   if (!transporterInstance) {
     const config = resolveMailConfig();
@@ -106,10 +113,10 @@ const getTransporter = () => {
         maxMessages: 100,
         rateDelta: 1000,
         rateLimit: 5,
-        connectionTimeout: 5000, // 5s connection timeout
-        greetingTimeout: 5000,   // 5s greeting timeout
-        socketTimeout: 8000,     // 8s socket timeout
-        dnsTimeout: 3000,        // 3s DNS resolution timeout
+        connectionTimeout: 5000, // 5s timeout
+        greetingTimeout: 5000,
+        socketTimeout: 8000,
+        dnsTimeout: 3000,
         tls: {
           rejectUnauthorized: process.env.EMAIL_REJECT_UNAUTHORIZED === 'true',
           minVersion: 'TLSv1.2',
@@ -128,63 +135,109 @@ const resetTransporter = () => {
   transporterInstance = null;
 };
 
+const setHttpSender = (fn) => {
+  customHttpSender = fn;
+};
+
+const resetHttpSender = () => {
+  customHttpSender = null;
+};
+
 /**
- * Dispatch email via HTTP API (Resend / Brevo) over HTTPS port 443
+ * Dispatch email via HTTPS/443 REST API (Resend / Brevo).
+ * Includes strict 5000ms AbortController timeout.
  */
 const sendViaHttpApi = async ({ to, subject, html, text, config }) => {
-  if (config.provider === 'resend') {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: config.from,
-        to: [to],
-        subject,
-        html,
-        text: text || undefined,
-      }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Resend API HTTP ${res.status}: ${errText}`);
-    }
-    const data = await res.json();
-    return data.id || 'OK';
-  } else if (config.provider === 'brevo') {
-    let fromEmail = config.from;
-    const match = config.from.match(/<([^>]+)>/);
-    if (match) fromEmail = match[1];
-
-    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'api-key': config.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        sender: { name: 'SecureBank', email: fromEmail },
-        to: [{ email: to }],
-        subject,
-        htmlContent: html,
-        textContent: text || undefined,
-      }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Brevo API HTTP ${res.status}: ${errText}`);
-    }
-    const data = await res.json();
-    return data.messageId || 'OK';
+  if (customHttpSender) {
+    return await customHttpSender({ to, subject, html, text, config });
   }
-  throw new Error(`Unsupported API provider: ${config.provider}`);
+
+  if (!config.apiKey) {
+    throw new Error(`Missing API Key for provider "${config.provider}". Please set ${config.provider.toUpperCase()}_API_KEY.`);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
+
+  try {
+    if (config.provider === 'resend') {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: config.from,
+          to: [to],
+          subject,
+          html,
+          text: text || undefined,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Resend API HTTP ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      return data.id || 'OK';
+    }
+
+    if (config.provider === 'brevo') {
+      let fromEmail = config.from;
+      let fromName = 'SecureBank';
+      const match = config.from.match(/(.*)<([^>]+)>/);
+      if (match) {
+        fromName = match[1].trim().replace(/^["']|["']$/g, '');
+        fromEmail = match[2].trim();
+      }
+
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': config.apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sender: { name: fromName, email: fromEmail },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+          textContent: text || undefined,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Brevo API HTTP ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      return data.messageId || 'OK';
+    }
+
+    throw new Error(`Unsupported HTTP mail provider: ${config.provider}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 };
 
 /**
  * Primary email dispatch method with performance timing and error isolation.
  * NEVER throws an error to the caller — returns boolean true/false.
+ *
+ * @param {object} options
+ * @param {string} options.to - Recipient email
+ * @param {string} options.subject - Email subject
+ * @param {string} options.html - HTML content
+ * @param {string} [options.text] - Plain text fallback
+ * @param {string} [options.type] - Category tag for diagnostic logs
+ * @returns {Promise<boolean>}
  */
 const sendMailAsync = async ({ to, subject, html, text, type = 'general' }) => {
   if (!to || typeof to !== 'string' || !to.includes('@')) {
@@ -194,13 +247,13 @@ const sendMailAsync = async ({ to, subject, html, text, type = 'general' }) => {
 
   const masked = maskEmail(to);
   const startTime = Date.now();
-  logger.info(`[EMAIL_ATTEMPT] type=${type} to=${masked}`);
+  const config = resolveMailConfig();
+  logger.info(`[EMAIL_ATTEMPT] provider=${config.provider} transport=${config.transport} type=${type} to=${masked}`);
 
   try {
-    const config = resolveMailConfig();
     let messageId = 'OK';
 
-    if (config.type === 'api') {
+    if (config.type === 'http') {
       messageId = await sendViaHttpApi({ to: to.trim(), subject, html, text, config });
     } else {
       const transporter = getTransporter();
@@ -215,19 +268,20 @@ const sendMailAsync = async ({ to, subject, html, text, type = 'general' }) => {
     }
 
     const duration = Date.now() - startTime;
-    logger.info(`[EMAIL_SENT] type=${type} to=${masked} duration=${duration}ms messageId=${messageId}`);
+    logger.info(`[EMAIL_SENT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms messageId=${messageId}`);
     return true;
   } catch (err) {
     const duration = Date.now() - startTime;
     const isTimeout =
+      err.name === 'AbortError' ||
       err.code === 'ETIMEDOUT' ||
       err.code === 'ESOCKET' ||
       err.message?.toLowerCase().includes('timeout');
 
     if (isTimeout) {
-      logger.error(`[EMAIL_TIMEOUT] type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
+      logger.error(`[EMAIL_TIMEOUT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
     } else {
-      logger.error(`[EMAIL_FAILED] type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
+      logger.error(`[EMAIL_FAILED] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
     }
     return false;
   }
@@ -254,24 +308,117 @@ const enqueueEmail = (fn, ...args) => {
 const verifyMailConnection = async () => {
   const config = resolveMailConfig();
 
-  if (config.type === 'api') {
-    return {
-      configured: true,
-      provider: config.provider,
-      transport: 'api',
-      port: 443,
-      secure: true,
-      status: 'CONNECTED',
-      message: `Transactional Email API (${config.provider}) configured over HTTPS port 443`,
-    };
+  // 1. HTTP Transactional API Verification (Resend / Brevo)
+  if (config.type === 'http') {
+    if (!config.apiKey) {
+      return {
+        success: false,
+        configured: false,
+        provider: config.provider,
+        transport: config.transport,
+        port: 443,
+        secure: true,
+        status: 'MISSING_API_KEY',
+        message: `${config.provider.toUpperCase()}_API_KEY environment variable is not configured on Render`,
+      };
+    }
+
+    try {
+      if (customHttpSender) {
+        return {
+          success: true,
+          configured: true,
+          provider: config.provider,
+          transport: config.transport,
+          port: 443,
+          secure: true,
+          status: 'OK',
+          message: `Transactional Email API (${config.provider}) verified over HTTPS/443`,
+        };
+      }
+
+      // Live verification ping over HTTPS/443
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
+
+      try {
+        if (config.provider === 'resend') {
+          const res = await fetch('https://api.resend.com/api-keys', {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${config.apiKey}` },
+            signal: controller.signal,
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            return {
+              success: false,
+              configured: true,
+              provider: config.provider,
+              transport: config.transport,
+              port: 443,
+              secure: true,
+              status: 'AUTH_ERROR',
+              error: `Resend API rejected credentials (HTTP ${res.status}): ${errText}`,
+            };
+          }
+        } else if (config.provider === 'brevo') {
+          const res = await fetch('https://api.brevo.com/v3/account', {
+            method: 'GET',
+            headers: { 'api-key': config.apiKey },
+            signal: controller.signal,
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            return {
+              success: false,
+              configured: true,
+              provider: config.provider,
+              transport: config.transport,
+              port: 443,
+              secure: true,
+              status: 'AUTH_ERROR',
+              error: `Brevo API rejected credentials (HTTP ${res.status}): ${errText}`,
+            };
+          }
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      return {
+        success: true,
+        configured: true,
+        provider: config.provider,
+        transport: config.transport,
+        port: 443,
+        secure: true,
+        status: 'OK',
+        message: `Transactional Email API (${config.provider}) verified over HTTPS/443`,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        configured: true,
+        provider: config.provider,
+        transport: config.transport,
+        port: 443,
+        secure: true,
+        status: 'CONNECTION_ERROR',
+        error: err.message,
+      };
+    }
   }
 
-  // SMTP Verification
+  // 2. SMTP Verification (Fallback)
   if (!config.user || !config.pass) {
     return {
+      success: false,
       configured: false,
-      provider: config.host,
-      transport: 'smtp',
+      provider: config.provider,
+      transport: config.transport,
       port: config.port,
       secure: config.secure,
       status: 'MISSING_CREDENTIALS',
@@ -294,19 +441,21 @@ const verifyMailConnection = async () => {
     }
 
     return {
+      success: true,
       configured: true,
-      provider: config.host,
-      transport: 'smtp',
+      provider: config.provider,
+      transport: config.transport,
       port: config.port,
       secure: config.secure,
-      status: 'CONNECTED',
+      status: 'OK',
       message: `SMTP connection to ${config.host}:${config.port} (SSL: ${config.secure}) verified successfully`,
     };
   } catch (err) {
     return {
+      success: false,
       configured: true,
-      provider: config.host,
-      transport: 'smtp',
+      provider: config.provider,
+      transport: config.transport,
       port: config.port,
       secure: config.secure,
       status: 'CONNECTION_ERROR',
@@ -320,6 +469,8 @@ module.exports = {
   getTransporter,
   setTransporter,
   resetTransporter,
+  setHttpSender,
+  resetHttpSender,
   sendMailAsync,
   enqueueEmail,
   verifyMailConnection,
