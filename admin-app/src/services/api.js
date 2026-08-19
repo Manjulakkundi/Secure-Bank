@@ -18,12 +18,18 @@ API.interceptors.request.use((config) => {
 API.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const url = err.config?.url || '';
+    const isAuthRoute = url.includes('/admin/login');
+
+    if (err.response?.status === 401 && !isAuthRoute) {
       localStorage.removeItem('adminToken');
-      window.location.href = '/login';
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err);
   }
 );
+
 
 export default API;

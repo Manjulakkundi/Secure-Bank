@@ -7,16 +7,16 @@
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
-// ─── Mailer ───────────────────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
-  host:   process.env.EMAIL_HOST   || 'smtp.gmail.com',
-  port:   parseInt(process.env.EMAIL_PORT) || 587,
+  host:   process.env.EMAIL_HOST   || process.env.SMTP_HOST || 'smtp.gmail.com',
+  port:   parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT || '587', 10),
   secure: false,
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: process.env.EMAIL_USER || process.env.SMTP_USER,
+    pass: process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS,
   },
 });
+
 
 // ─── Template helpers ─────────────────────────────────────────────────────────
 const fmt = (n) =>

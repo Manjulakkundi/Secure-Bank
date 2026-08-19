@@ -23,19 +23,21 @@ const validateSignup = [
     .isLength({ min: 2, max: 100 }).withMessage('Name must be 2–100 chars'),
   body('customerEmail')
     .trim().isEmail().withMessage('Valid email required')
-    .normalizeEmail(),
+    .toLowerCase(),
   body('customerPhone')
-    .trim().isMobilePhone('en-IN').withMessage('Valid 10-digit Indian phone required'),
+    .trim().notEmpty().withMessage('Valid phone number required')
+    .matches(/^[0-9]{10}$/).withMessage('Valid 10-digit mobile number required'),
   body('AccountType')
     .isIn(['Savings', 'Current']).withMessage('AccountType must be Savings or Current'),
   body('CustomerPassword')
     .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#$%^&*])/)
+    .matches(/^(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])/)
     .withMessage('Password must contain uppercase, number, and special character'),
   body('customerAddress').trim().notEmpty().withMessage('Address required'),
   body('customerCity').trim().notEmpty().withMessage('City required'),
   handleValidation,
 ];
+
 
 const validateLogin = [
   // Accept accountNumber OR email OR phone — at least one required
@@ -95,7 +97,7 @@ const validateLoan = [
 ];
 
 const validateOtp = [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('email').trim().isEmail().toLowerCase().withMessage('Valid email required'),
   body('otp')
     .trim().notEmpty().isLength({ min: 6, max: 6 }).isNumeric()
     .withMessage('OTP must be a 6-digit number'),
@@ -103,14 +105,15 @@ const validateOtp = [
 ];
 
 const validatePasswordReset = [
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('email').trim().isEmail().toLowerCase().withMessage('Valid email required'),
   body('otp').trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage('Valid OTP required'),
   body('newPassword')
     .isLength({ min: 8 }).withMessage('Password min 8 characters')
-    .matches(/^(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#$%^&*])/)
+    .matches(/^(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])/)
     .withMessage('Must contain uppercase, number, special character'),
   handleValidation,
 ];
+
 
 const validateBeneficiary = [
   body('beneficiaryAccount')

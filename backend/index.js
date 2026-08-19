@@ -98,12 +98,15 @@ app.use(errorHandler);
 const investmentScheduler = require('./services/investmentScheduler');
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 8081;
-app.listen(PORT, () => {
-  logger.info(`✅ SecureBank API running on port ${PORT} [${process.env.NODE_ENV}]`);
-  // Start background investment maturity & reminder scheduler (runs every 60s)
-  investmentScheduler.startScheduler(60000);
-});
+if (require.main === module) {
+  const PORT = process.env.PORT || 8081;
+  app.listen(PORT, () => {
+    logger.info(`✅ SecureBank API running on port ${PORT} [${process.env.NODE_ENV}]`);
+    // Start background investment maturity & reminder scheduler (runs every 60s)
+    investmentScheduler.startScheduler(60000);
+  });
+}
+
 
 module.exports = app; // exported for Jest/Supertest
 

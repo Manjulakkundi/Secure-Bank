@@ -22,10 +22,11 @@ const investCtrl = require('../controllers/investmentController');
 router.post('/signup',               validateSignup,                                          authCtrl.signup);
 router.post('/login',                validateLogin,                                           authCtrl.login);
 router.post('/verify-otp',           validateOtp,                                             authCtrl.verifyOtp);
-router.post('/resend-otp',           [body('email').isEmail(), handleValidation],              authCtrl.resendOtp);
-router.post('/forgot-password',      [body('email').isEmail(), handleValidation],              authCtrl.forgotPassword);
+router.post('/resend-otp',           [body('email').trim().isEmail().toLowerCase(), handleValidation], authCtrl.resendOtp);
+router.post('/forgot-password',      [body('email').trim().isEmail().toLowerCase(), handleValidation], authCtrl.forgotPassword);
 router.post('/reset-password',       validatePasswordReset,                                   authCtrl.resetPassword);
-router.post('/forgot-account-number',[body('email').isEmail(), handleValidation],              authCtrl.forgotAccountNumber);
+router.post('/forgot-account-number',[body('email').trim().isEmail().toLowerCase(), handleValidation], authCtrl.forgotAccountNumber);
+
 
 // ─── Profile (Protected) ──────────────────────────────────────────────────────
 router.get('/profile',               verifyUser, authCtrl.getProfile);

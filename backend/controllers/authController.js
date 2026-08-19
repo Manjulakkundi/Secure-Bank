@@ -20,9 +20,15 @@ const signup = async (req, res, next) => {
     const { customerName, AccountType, customerPhone, customerEmail,
             customerAddress, customerCity, CustomerPassword } = req.body;
 
+    const cleanEmail = customerEmail ? customerEmail.trim().toLowerCase() : '';
+    const cleanPhone = customerPhone ? customerPhone.trim() : '';
+    const cleanName  = customerName ? customerName.trim() : '';
+    const cleanAddress = customerAddress ? customerAddress.trim() : '';
+    const cleanCity  = customerCity ? customerCity.trim() : '';
+
     const [existing] = await conn.query(
-      'SELECT 1 FROM Customer WHERE customerEmail=? OR customerPhone=? LIMIT 1',
-      [customerEmail, customerPhone]
+      'SELECT 1 FROM Customer WHERE LOWER(customerEmail)=LOWER(?) OR customerPhone=? LIMIT 1',
+      [cleanEmail, cleanPhone]
     );
     if (existing.length > 0) {
       return sendBadRequest(res, 'Email or phone number already registered');
@@ -37,31 +43,31 @@ const signup = async (req, res, next) => {
         (AccountNumber, customerName, AccountType, customerPhone, customerEmail,
          customerAddress, customerCity, CustomerPassword, Balance, AccountVerify, AccountStatus)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'Active')`,
-      [accountNumber, customerName, AccountType, customerPhone, customerEmail,
-       customerAddress, customerCity, hashedPassword]
+      [accountNumber, cleanName, AccountType, cleanPhone, cleanEmail,
+       cleanAddress, cleanCity, hashedPassword]
     );
 
-    const otp      = crypto.randomInt(100000, 999999).toString();
-    const otpHash  = await bcrypt.hash(otp, 8);
+    const otp       = crypto.randomInt(100000, 999999).toString();
+    const otpHash   = await bcrypt.hash(otp, 8);
     const expiresAt = new Date(Date.now() + (parseInt(process.env.OTP_EXPIRY_MINUTES) || 10) * 60000);
 
     await conn.query(
       `INSERT INTO otp_verifications (email, otp_hash, purpose, expires_at)
        VALUES (?, ?, 'SIGNUP', ?)
        ON DUPLICATE KEY UPDATE otp_hash=?, expires_at=?, used=0`,
-      [customerEmail, otpHash, expiresAt, otpHash, expiresAt]
+      [cleanEmail, otpHash, expiresAt, otpHash, expiresAt]
     );
 
     await conn.commit();
 
-    // Send OTP for verification
-    await sendOtpEmail(customerEmail, otp, 'SIGNUP');
-    // Welcome email is sent after OTP verification, not here
+    // Send OTP for verification (non-blocking for DB commit)
+    sendOtpEmail(cleanEmail, otp, 'SIGNUP')
+      .catch(e => logger.warn(`Signup OTP email error for ${cleanEmail}: ${e.message}`));
 
-    await logAudit(accountNumber, ACTIONS.SIGNUP, `New account: ${customerEmail}`, req.ip);
-    logger.info(`Signup: ${accountNumber} (${customerEmail})`);
+    await logAudit(accountNumber, ACTIONS.SIGNUP, `New account: ${cleanEmail}`, req.ip);
+    logger.info(`Signup: ${accountNumber} (${cleanEmail})`);
 
-    return sendCreated(res, { accountNumber, email: customerEmail },
+    return sendCreated(res, { accountNumber, email: cleanEmail },
       'Account created. Check your email for OTP verification.');
   } catch (err) {
     await conn.rollback();
@@ -76,17 +82,20 @@ const login = async (req, res, next) => {
   try {
     const { accountNumber, email, phone, password } = req.body;
 
-    // Detect login type
-    let query, param;
-    if (accountNumber) {
+    // Detect login type & normalize parameters
+    let query, param, idType;
+    if (accountNumber && typeof accountNumber === 'string' && accountNumber.trim()) {
       query = 'SELECT * FROM Customer WHERE AccountNumber = ? LIMIT 1';
-      param = accountNumber;
-    } else if (email) {
-      query = 'SELECT * FROM Customer WHERE customerEmail = ? LIMIT 1';
-      param = email;
-    } else if (phone) {
+      param = accountNumber.trim();
+      idType = 'accountNumber';
+    } else if (email && typeof email === 'string' && email.trim()) {
+      query = 'SELECT * FROM Customer WHERE LOWER(customerEmail) = LOWER(?) LIMIT 1';
+      param = email.trim().toLowerCase();
+      idType = 'email';
+    } else if (phone && typeof phone === 'string' && phone.trim()) {
       query = 'SELECT * FROM Customer WHERE customerPhone = ? LIMIT 1';
-      param = phone;
+      param = phone.trim();
+      idType = 'phone';
     } else {
       return sendBadRequest(res, 'Provide account number, email, or phone number');
     }
@@ -94,11 +103,12 @@ const login = async (req, res, next) => {
     const [rows] = await db.query(query, [param]);
 
     if (rows.length === 0) {
-      logger.warn(`Login failed: not found — ${param} | IP: ${req.ip}`);
+      logger.warn(`Login attempt [${idType}]: user found = false | IP: ${req.ip}`);
       return sendUnauthorized(res, 'Invalid credentials');
     }
 
     const user = rows[0];
+    logger.info(`Login attempt [${idType}]: user found = true | AccountVerify = ${user.AccountVerify} | AccountStatus = ${user.AccountStatus} | JWT_SECRET = ${process.env.JWT_SECRET ? 'PRESENT' : 'MISSING'}`);
 
     if (user.AccountStatus === 'Frozen') {
       return sendUnauthorized(res, 'Your account has been frozen. Contact support.');
@@ -110,7 +120,7 @@ const login = async (req, res, next) => {
 
     const passwordMatch = await bcrypt.compare(password, user.CustomerPassword);
     if (!passwordMatch) {
-      logger.warn(`Login failed: wrong password for ${user.AccountNumber} | IP: ${req.ip}`);
+      logger.warn(`Login failed: wrong password for account ${user.AccountNumber} | IP: ${req.ip}`);
       return sendUnauthorized(res, 'Invalid credentials');
     }
 
@@ -139,9 +149,11 @@ const verifyOtp = async (req, res, next) => {
   const conn = await db.getConnection();
   try {
     const { email, otp } = req.body;
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+
     const [rows] = await conn.query(
-      `SELECT * FROM otp_verifications WHERE email=? AND purpose='SIGNUP' AND used=0 ORDER BY created_at DESC LIMIT 1`,
-      [email]
+      `SELECT * FROM otp_verifications WHERE LOWER(email)=LOWER(?) AND purpose='SIGNUP' AND used=0 ORDER BY created_at DESC LIMIT 1`,
+      [cleanEmail]
     );
 
     if (rows.length === 0) return sendBadRequest(res, 'No pending OTP found for this email');
@@ -155,23 +167,23 @@ const verifyOtp = async (req, res, next) => {
     if (!match) return sendBadRequest(res, 'Invalid OTP');
 
     await conn.beginTransaction();
-    await conn.query(`UPDATE Customer SET AccountVerify=1 WHERE customerEmail=?`, [email]);
+    await conn.query(`UPDATE Customer SET AccountVerify=1 WHERE LOWER(customerEmail)=LOWER(?)`, [cleanEmail]);
     await conn.query(`UPDATE otp_verifications SET used=1 WHERE id=?`, [record.id]);
 
     // Fetch full customer details for welcome email
     const [custRows] = await conn.query(
-      'SELECT AccountNumber, customerName, AccountType, CreatedAt FROM Customer WHERE customerEmail=?',
-      [email]
+      'SELECT AccountNumber, customerName, AccountType, CreatedAt FROM Customer WHERE LOWER(customerEmail)=LOWER(?)',
+      [cleanEmail]
     );
 
     await conn.commit();
 
-    await logAudit(email, ACTIONS.OTP_VERIFIED, 'Email verified', req.ip);
+    await logAudit(cleanEmail, ACTIONS.OTP_VERIFIED, 'Email verified', req.ip);
 
     // Send welcome email AFTER verification — account is now confirmed active
     if (custRows.length > 0) {
       const c = custRows[0];
-      sendWelcomeEmail(email, c.customerName, c.AccountNumber, c.AccountType, c.CreatedAt)
+      sendWelcomeEmail(cleanEmail, c.customerName, c.AccountNumber, c.AccountType, c.CreatedAt)
         .catch(e => logger.warn(`Welcome email failed: ${e.message}`));
     }
 
@@ -188,21 +200,25 @@ const verifyOtp = async (req, res, next) => {
 const resendOtp = async (req, res, next) => {
   try {
     const { email } = req.body;
-    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE customerEmail=?', [email]);
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+
+    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE LOWER(customerEmail)=LOWER(?)', [cleanEmail]);
     if (users.length === 0) return sendNotFound(res, 'Email not found');
 
-    const otp      = crypto.randomInt(100000, 999999).toString();
-    const otpHash  = await bcrypt.hash(otp, 8);
+    const otp       = crypto.randomInt(100000, 999999).toString();
+    const otpHash   = await bcrypt.hash(otp, 8);
     const expiresAt = new Date(Date.now() + (parseInt(process.env.OTP_EXPIRY_MINUTES) || 10) * 60000);
 
     await db.query(
       `INSERT INTO otp_verifications (email, otp_hash, purpose, expires_at)
        VALUES (?, ?, 'SIGNUP', ?)
        ON DUPLICATE KEY UPDATE otp_hash=?, expires_at=?, used=0`,
-      [email, otpHash, expiresAt, otpHash, expiresAt]
+      [cleanEmail, otpHash, expiresAt, otpHash, expiresAt]
     );
 
-    await sendOtpEmail(email, otp, 'SIGNUP');
+    sendOtpEmail(cleanEmail, otp, 'SIGNUP')
+      .catch(e => logger.warn(`Resend OTP email error for ${cleanEmail}: ${e.message}`));
+
     await logAudit(users[0].AccountNumber, ACTIONS.OTP_SENT, 'OTP resent', req.ip);
     return sendSuccess(res, {}, 'OTP resent to your email');
   } catch (err) {
@@ -214,21 +230,25 @@ const resendOtp = async (req, res, next) => {
 const forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
-    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE customerEmail=?', [email]);
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+
+    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE LOWER(customerEmail)=LOWER(?)', [cleanEmail]);
     if (users.length === 0) return sendSuccess(res, {}, 'If this email exists, an OTP has been sent.');
 
-    const otp      = crypto.randomInt(100000, 999999).toString();
-    const otpHash  = await bcrypt.hash(otp, 8);
+    const otp       = crypto.randomInt(100000, 999999).toString();
+    const otpHash   = await bcrypt.hash(otp, 8);
     const expiresAt = new Date(Date.now() + (parseInt(process.env.OTP_EXPIRY_MINUTES) || 10) * 60000);
 
     await db.query(
       `INSERT INTO otp_verifications (email, otp_hash, purpose, expires_at)
        VALUES (?, ?, 'PASSWORD_RESET', ?)
        ON DUPLICATE KEY UPDATE otp_hash=?, expires_at=?, used=0`,
-      [email, otpHash, expiresAt, otpHash, expiresAt]
+      [cleanEmail, otpHash, expiresAt, otpHash, expiresAt]
     );
 
-    await sendOtpEmail(email, otp, 'PASSWORD_RESET');
+    sendOtpEmail(cleanEmail, otp, 'PASSWORD_RESET')
+      .catch(e => logger.warn(`Password reset OTP email error for ${cleanEmail}: ${e.message}`));
+
     await logAudit(users[0].AccountNumber, ACTIONS.OTP_SENT, 'Password reset OTP sent', req.ip);
     return sendSuccess(res, {}, 'If this email exists, an OTP has been sent.');
   } catch (err) {
@@ -241,9 +261,11 @@ const resetPassword = async (req, res, next) => {
   const conn = await db.getConnection();
   try {
     const { email, otp, newPassword } = req.body;
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+
     const [rows] = await conn.query(
-      `SELECT * FROM otp_verifications WHERE email=? AND purpose='PASSWORD_RESET' AND used=0 ORDER BY created_at DESC LIMIT 1`,
-      [email]
+      `SELECT * FROM otp_verifications WHERE LOWER(email)=LOWER(?) AND purpose='PASSWORD_RESET' AND used=0 ORDER BY created_at DESC LIMIT 1`,
+      [cleanEmail]
     );
     if (rows.length === 0) return sendBadRequest(res, 'No pending password reset request');
     const record = rows[0];
@@ -254,12 +276,12 @@ const resetPassword = async (req, res, next) => {
 
     const hashed = await bcrypt.hash(newPassword, 12);
     await conn.beginTransaction();
-    await conn.query(`UPDATE Customer SET CustomerPassword=? WHERE customerEmail=?`, [hashed, email]);
+    await conn.query(`UPDATE Customer SET CustomerPassword=? WHERE LOWER(customerEmail)=LOWER(?)`, [hashed, cleanEmail]);
     await conn.query(`UPDATE otp_verifications SET used=1 WHERE id=?`, [record.id]);
     await conn.commit();
 
-    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE customerEmail=?', [email]);
-    await logAudit(users[0]?.AccountNumber || email, ACTIONS.PASSWORD_RESET, 'Password reset via OTP', req.ip);
+    const [users] = await db.query('SELECT AccountNumber FROM Customer WHERE LOWER(customerEmail)=LOWER(?)', [cleanEmail]);
+    await logAudit(users[0]?.AccountNumber || cleanEmail, ACTIONS.PASSWORD_RESET, 'Password reset via OTP', req.ip);
     return sendSuccess(res, {}, 'Password reset successfully. Please login.');
   } catch (err) {
     await conn.rollback();
@@ -273,8 +295,10 @@ const resetPassword = async (req, res, next) => {
 const forgotAccountNumber = async (req, res, next) => {
   try {
     const { email } = req.body;
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+
     const [users] = await db.query(
-      'SELECT AccountNumber, customerName, AccountStatus FROM Customer WHERE customerEmail=?', [email]
+      'SELECT AccountNumber, customerName, AccountStatus FROM Customer WHERE LOWER(customerEmail)=LOWER(?)', [cleanEmail]
     );
     // Always generic response — don't leak existence
     if (users.length === 0) {
@@ -282,13 +306,16 @@ const forgotAccountNumber = async (req, res, next) => {
     }
 
     const { AccountNumber, customerName, AccountStatus } = users[0];
-    await sendAccountNumberEmail(email, customerName, AccountNumber, AccountStatus);
+    sendAccountNumberEmail(cleanEmail, customerName, AccountNumber, AccountStatus)
+      .catch(e => logger.warn(`Account recovery email error for ${cleanEmail}: ${e.message}`));
+
     await logAudit(AccountNumber, 'ACCOUNT_RECOVERY', 'Account number recovery requested', req.ip);
     return sendSuccess(res, {}, 'If this email is registered, your account number has been sent.');
   } catch (err) {
     next(err);
   }
 };
+
 
 /** GET /customer/profile — return full profile for logged-in customer */
 const getProfile = async (req, res, next) => {

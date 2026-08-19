@@ -18,13 +18,32 @@ API.interceptors.request.use((config) => {
 API.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const url = err.config?.url || '';
+    const isAuthRoute =
+      url.includes('/customer/login') ||
+      url.includes('/customer/signup') ||
+      url.includes('/customer/verify-otp') ||
+      url.includes('/customer/resend-otp') ||
+      url.includes('/customer/forgot-password') ||
+      url.includes('/customer/reset-password') ||
+      url.includes('/customer/forgot-account-number');
+
+    if (err.response?.status === 401 && !isAuthRoute) {
       localStorage.removeItem('customerToken');
-      window.location.href = '/login';
-      return new Promise(() => {});
+      const currentPath = window.location.pathname;
+      if (
+        !currentPath.startsWith('/login') &&
+        !currentPath.startsWith('/signup') &&
+        !currentPath.startsWith('/verify-otp') &&
+        !currentPath.startsWith('/forgot-password') &&
+        !currentPath.startsWith('/forgot-account-number')
+      ) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err);
   }
 );
+
 
 export default API;

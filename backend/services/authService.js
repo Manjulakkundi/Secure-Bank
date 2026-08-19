@@ -11,15 +11,17 @@ const JWT = require('jsonwebtoken');
  */
 const createTokenForUser = (user) => {
   const payload = {
-    AccNumber:    user.accountNumber,
-    customerName: user.customerName,
-    AccountType:  user.AccountType,
-    role:         'user',
+    AccNumber:     user.accountNumber,
+    accountNumber: user.accountNumber,
+    customerName:  user.customerName,
+    AccountType:   user.AccountType,
+    role:          'user',
   };
   return JWT.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '1h',
   });
 };
+
 
 /**
  * Create JWT for authenticated admin.

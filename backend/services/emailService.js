@@ -6,17 +6,18 @@ const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: 587,
+  host: process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT || '587', 10),
   secure: false,
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: process.env.EMAIL_USER || process.env.SMTP_USER,
+    pass: process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS,
   },
   connectionTimeout: 30000,
   greetingTimeout: 30000,
   socketTimeout: 30000,
 });
+
 
 const BASE_HEADER = `
   <div style="background:#1A3C5E;padding:24px;text-align:center">
