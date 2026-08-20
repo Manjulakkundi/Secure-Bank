@@ -24,81 +24,106 @@ const maskEmail = (email) => {
 };
 
 /**
+ * Parse display-name and email address from formatted sender string (e.g. 'SecureBank <noreply@securebank.com>')
+ */
+const parseSender = (rawFrom) => {
+  const fallback = 'noreply@securebank.com';
+  if (!rawFrom || typeof rawFrom !== 'string') {
+    return { name: 'SecureBank', email: fallback };
+  }
+  const str = rawFrom.trim();
+  const match = str.match(/(.*)<([^>]+)>/);
+  if (match) {
+    const name = match[1].trim().replace(/^["']|["']$/g, '') || 'SecureBank';
+    const email = match[2].trim() || fallback;
+    return { name, email };
+  }
+  return { name: 'SecureBank', email: str };
+};
+
+/**
+ * Parse recipient into Brevo-compliant format
+ */
+const parseRecipient = (to) => {
+  if (!to) return { email: '' };
+  if (typeof to === 'string') {
+    const match = to.match(/(.*)<([^>]+)>/);
+    if (match) {
+      const name = match[1].trim().replace(/^["']|["']$/g, '');
+      return { name: name || undefined, email: match[2].trim() };
+    }
+    return { email: to.trim() };
+  }
+  if (typeof to === 'object' && to.email) {
+    return { name: to.name || undefined, email: String(to.email).trim() };
+  }
+  return { email: String(to).trim() };
+};
+
+/**
  * Resolves active mail provider configuration based on environment variables.
  * Priority:
- *  1. Explicit EMAIL_PROVIDER=resend OR RESEND_API_KEY
- *  2. Explicit EMAIL_PROVIDER=brevo OR BREVO_API_KEY
- *  3. Explicit EMAIL_PROVIDER=smtp OR EMAIL_USER / EMAIL_PASS
+ *  1. Brevo HTTP API (Sole production choice for Render HTTPS/443) — default for all production deployments.
+ *  2. SMTP Transport (Explicit local development fallback ONLY if EMAIL_PROVIDER=smtp is explicitly set in .env).
  */
 const resolveMailConfig = () => {
   const provider = (process.env.EMAIL_PROVIDER || '').trim().toLowerCase();
-  const resendApiKey = (process.env.RESEND_API_KEY || process.env.RESEND_KEY || '').trim();
   const brevoApiKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim();
 
-  // 1. Resend HTTP API (Primary production choice for Render HTTPS/443)
-  if (provider === 'resend' || (resendApiKey && provider !== 'smtp' && provider !== 'brevo')) {
-    return {
-      type: 'http',
-      provider: 'resend',
-      transport: 'https',
-      port: 443,
-      secure: true,
-      apiKey: resendApiKey,
-      from: process.env.EMAIL_FROM || '"SecureBank" <onboarding@resend.dev>',
-    };
-  }
+  // 1. SMTP Transport (ONLY if explicitly set via EMAIL_PROVIDER=smtp for local offline dev)
+  if (provider === 'smtp') {
+    const host = (process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+    const user = (process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
+    const pass = (process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').trim();
+    const isGmail = host.toLowerCase().includes('gmail') || process.env.EMAIL_SERVICE?.toLowerCase() === 'gmail';
 
-  // 2. Brevo HTTP API
-  if (provider === 'brevo' || (brevoApiKey && provider !== 'smtp' && provider !== 'resend')) {
+    let port;
+    let secure;
+
+    if (process.env.EMAIL_FORCE_PORT === 'true' && (process.env.EMAIL_PORT || process.env.SMTP_PORT)) {
+      port = parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT, 10);
+      secure = process.env.EMAIL_SECURE === 'true' || port === 465;
+    } else if (isGmail) {
+      port = 465;
+      secure = true;
+    } else {
+      const rawPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
+      port = rawPort ? parseInt(rawPort, 10) : 587;
+      secure = process.env.EMAIL_SECURE === 'true' || port === 465;
+    }
+
     return {
-      type: 'http',
-      provider: 'brevo',
-      transport: 'https',
-      port: 443,
-      secure: true,
-      apiKey: brevoApiKey,
+      type: 'smtp',
+      provider: isGmail ? 'gmail' : host,
+      transport: 'smtp',
+      host,
+      port,
+      secure,
+      user,
+      pass,
       from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
     };
   }
 
-  // 3. SMTP Transport (Fallback / Local development)
-  const host = (process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
-  const user = (process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
-  const pass = (process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').trim();
-  const isGmail = host.toLowerCase().includes('gmail') || process.env.EMAIL_SERVICE?.toLowerCase() === 'gmail';
-
-  let port;
-  let secure;
-
-  if (process.env.EMAIL_FORCE_PORT === 'true' && (process.env.EMAIL_PORT || process.env.SMTP_PORT)) {
-    port = parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT, 10);
-    secure = process.env.EMAIL_SECURE === 'true' || port === 465;
-  } else if (isGmail) {
-    port = 465;
-    secure = true;
-  } else {
-    const rawPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
-    port = rawPort ? parseInt(rawPort, 10) : 587;
-    secure = process.env.EMAIL_SECURE === 'true' || port === 465;
-  }
-
+  // 2. Brevo HTTP API (Sole production provider over HTTPS/443)
+  const rawFrom = process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>';
+  const sender = parseSender(rawFrom);
   return {
-    type: 'smtp',
-    provider: isGmail ? 'gmail' : host,
-    transport: 'smtp',
-    host,
-    port,
-    secure,
-    user,
-    pass,
-    from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
+    type: 'http',
+    provider: 'brevo',
+    transport: 'https',
+    port: 443,
+    secure: true,
+    apiKey: brevoApiKey,
+    from: rawFrom,
+    sender,
   };
 };
 
 let transporterInstance = null;
 let customHttpSender = null;
 
-/** Create or retrieve the singleton pooled Nodemailer transporter for SMTP fallback */
+/** Create or retrieve the singleton pooled Nodemailer transporter for explicit SMTP testing */
 const getTransporter = () => {
   if (!transporterInstance) {
     const config = resolveMailConfig();
@@ -113,7 +138,7 @@ const getTransporter = () => {
         maxMessages: 100,
         rateDelta: 1000,
         rateLimit: 5,
-        connectionTimeout: 5000, // 5s timeout
+        connectionTimeout: 5000,
         greetingTimeout: 5000,
         socketTimeout: 8000,
         dnsTimeout: 3000,
@@ -144,8 +169,8 @@ const resetHttpSender = () => {
 };
 
 /**
- * Dispatch email via HTTPS/443 REST API (Resend / Brevo).
- * Includes strict 5000ms AbortController timeout.
+ * Dispatch email via Brevo HTTPS/443 REST API.
+ * Includes strict timeout protection.
  */
 const sendViaHttpApi = async ({ to, subject, html, text, config }) => {
   if (customHttpSender) {
@@ -153,75 +178,45 @@ const sendViaHttpApi = async ({ to, subject, html, text, config }) => {
   }
 
   if (!config.apiKey) {
-    throw new Error(`Missing API Key for provider "${config.provider}". Please set ${config.provider.toUpperCase()}_API_KEY.`);
+    throw new Error(`Missing API Key for provider "${config.provider}". Please set BREVO_API_KEY.`);
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const timeoutMs = parseInt(process.env.EMAIL_TIMEOUT_MS, 10) || 12000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
 
   try {
-    if (config.provider === 'resend') {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: config.from,
-          to: [to],
-          subject,
-          html,
-          text: text || undefined,
-        }),
-        signal: controller.signal,
-      });
+    const sender = config.sender || parseSender(config.from);
+    const recipient = parseRecipient(to);
+    const toPayload = [
+      recipient.name ? { email: recipient.email, name: recipient.name } : { email: recipient.email }
+    ];
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Resend API HTTP ${res.status}: ${errText}`);
-      }
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': config.apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: sender.name, email: sender.email },
+        to: toPayload,
+        subject,
+        htmlContent: html,
+        textContent: text || undefined,
+      }),
+      signal: controller.signal,
+    });
 
-      const data = await res.json();
-      return data.id || 'OK';
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Brevo API HTTP ${res.status}: ${errText}`);
     }
 
-    if (config.provider === 'brevo') {
-      let fromEmail = config.from;
-      let fromName = 'SecureBank';
-      const match = config.from.match(/(.*)<([^>]+)>/);
-      if (match) {
-        fromName = match[1].trim().replace(/^["']|["']$/g, '');
-        fromEmail = match[2].trim();
-      }
-
-      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: {
-          'api-key': config.apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sender: { name: fromName, email: fromEmail },
-          to: [{ email: to }],
-          subject,
-          htmlContent: html,
-          textContent: text || undefined,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Brevo API HTTP ${res.status}: ${errText}`);
-      }
-
-      const data = await res.json();
-      return data.messageId || 'OK';
-    }
-
-    throw new Error(`Unsupported HTTP mail provider: ${config.provider}`);
+    const data = await res.json();
+    return data.messageId || 'OK';
   } finally {
     clearTimeout(timeoutId);
   }
@@ -308,7 +303,7 @@ const enqueueEmail = (fn, ...args) => {
 const verifyMailConnection = async () => {
   const config = resolveMailConfig();
 
-  // 1. HTTP Transactional API Verification (Resend / Brevo)
+  // 1. Brevo HTTP Transactional API Verification
   if (config.type === 'http') {
     if (!config.apiKey) {
       return {
@@ -319,7 +314,7 @@ const verifyMailConnection = async () => {
         port: 443,
         secure: true,
         status: 'MISSING_API_KEY',
-        message: `${config.provider.toUpperCase()}_API_KEY environment variable is not configured on Render`,
+        message: 'BREVO_API_KEY environment variable is not configured',
       };
     }
 
@@ -339,50 +334,31 @@ const verifyMailConnection = async () => {
 
       // Live verification ping over HTTPS/443
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
       if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
 
       try {
-        if (config.provider === 'resend') {
-          const res = await fetch('https://api.resend.com/api-keys', {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${config.apiKey}` },
-            signal: controller.signal,
-          });
+        const res = await fetch('https://api.brevo.com/v3/account', {
+          method: 'GET',
+          headers: {
+            'api-key': config.apiKey,
+            'Accept': 'application/json',
+          },
+          signal: controller.signal,
+        });
 
-          if (!res.ok) {
-            const errText = await res.text();
-            return {
-              success: false,
-              configured: true,
-              provider: config.provider,
-              transport: config.transport,
-              port: 443,
-              secure: true,
-              status: 'AUTH_ERROR',
-              error: `Resend API rejected credentials (HTTP ${res.status}): ${errText}`,
-            };
-          }
-        } else if (config.provider === 'brevo') {
-          const res = await fetch('https://api.brevo.com/v3/account', {
-            method: 'GET',
-            headers: { 'api-key': config.apiKey },
-            signal: controller.signal,
-          });
-
-          if (!res.ok) {
-            const errText = await res.text();
-            return {
-              success: false,
-              configured: true,
-              provider: config.provider,
-              transport: config.transport,
-              port: 443,
-              secure: true,
-              status: 'AUTH_ERROR',
-              error: `Brevo API rejected credentials (HTTP ${res.status}): ${errText}`,
-            };
-          }
+        if (!res.ok) {
+          const errText = await res.text();
+          return {
+            success: false,
+            configured: true,
+            provider: config.provider,
+            transport: config.transport,
+            port: 443,
+            secure: true,
+            status: 'AUTH_ERROR',
+            error: `Brevo API rejected credentials (HTTP ${res.status}): ${errText}`,
+          };
         }
       } finally {
         clearTimeout(timeoutId);
@@ -464,6 +440,8 @@ const verifyMailConnection = async () => {
   }
 };
 
+
+
 module.exports = {
   resolveMailConfig,
   getTransporter,
@@ -475,4 +453,7 @@ module.exports = {
   enqueueEmail,
   verifyMailConnection,
   maskEmail,
+  parseSender,
+  parseRecipient,
 };
+

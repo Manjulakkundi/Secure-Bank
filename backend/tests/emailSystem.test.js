@@ -69,11 +69,13 @@ const notificationService = require('../services/notificationService');
 describe('─── 1. Mailer Engine & Transport Configuration ───', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.EMAIL_PROVIDER = 'smtp';
     mailer.setTransporter({
       sendMail: mockSendMail,
       verify: mockVerify,
     });
   });
+
 
 
   it('masks emails properly for privacy-safe logs', () => {
@@ -83,6 +85,21 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
     expect(mailer.maskEmail(null)).toBe('unknown');
     expect(mailer.maskEmail('notanemail')).toBe('invalid');
   });
+
+  it('correctly parses sender formats for Brevo API', () => {
+    const s1 = mailer.parseSender('SecureBank <noreply@example.com>');
+    expect(s1).toEqual({ name: 'SecureBank', email: 'noreply@example.com' });
+
+    const s2 = mailer.parseSender('noreply@example.com');
+    expect(s2).toEqual({ name: 'SecureBank', email: 'noreply@example.com' });
+
+    const s3 = mailer.parseSender('"SecureBank Alerts" <alerts@securebank.com>');
+    expect(s3).toEqual({ name: 'SecureBank Alerts', email: 'alerts@securebank.com' });
+
+    const s4 = mailer.parseSender('');
+    expect(s4).toEqual({ name: 'SecureBank', email: 'noreply@securebank.com' });
+  });
+
 
   it('sends email successfully with duration tracking and returns true', async () => {
     mockSendMail.mockResolvedValueOnce({ messageId: 'test-msg-123' });
@@ -119,6 +136,7 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
 describe('─── 2. Email Failure & Connection Timeout Isolation ───', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.EMAIL_PROVIDER = 'smtp';
     mailer.setTransporter({
       sendMail: mockSendMail,
       verify: mockVerify,
@@ -159,12 +177,14 @@ describe('─── 2. Email Failure & Connection Timeout Isolation ───', 
 describe('─── 3. All Email & Notification Service Methods ───', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.EMAIL_PROVIDER = 'smtp';
     mockSendMail.mockResolvedValue({ messageId: 'mock-id' });
     mailer.setTransporter({
       sendMail: mockSendMail,
       verify: mockVerify,
     });
   });
+
 
 
   it('sends Signup OTP email', async () => {
@@ -361,8 +381,9 @@ describe('─── 4. Health Check Endpoints ───', () => {
   });
 
   it('GET /health/email returns 200 when SMTP connection is verified', async () => {
-    delete process.env.EMAIL_PROVIDER;
-    delete process.env.RESEND_API_KEY;
+    process.env.EMAIL_PROVIDER = 'smtp';
+    process.env.EMAIL_USER = 'test@example.com';
+    process.env.EMAIL_PASS = 'secret123';
     mockVerify.mockResolvedValueOnce(true);
 
     const res = await request(app).get('/health/email');
@@ -375,21 +396,22 @@ describe('─── 4. Health Check Endpoints ───', () => {
     expect(res.body.apiKey).toBeUndefined();
   });
 
-  it('GET /health/email returns 200 when HTTP Resend provider is active', async () => {
-    process.env.EMAIL_PROVIDER = 'resend';
-    process.env.RESEND_API_KEY = 're_test_key_12345';
-    mailer.setHttpSender(async () => 'mock-resend-id');
+  it('GET /health/email returns 200 when HTTP Brevo provider is active', async () => {
+    process.env.EMAIL_PROVIDER = 'brevo';
+    process.env.BREVO_API_KEY = 'brevo_test_key_12345';
+    mailer.setHttpSender(async () => 'mock-brevo-id');
 
     const res = await request(app).get('/health/email');
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.status).toBe('OK');
-    expect(res.body.provider).toBe('resend');
+    expect(res.body.provider).toBe('brevo');
     expect(res.body.transport).toBe('https');
     expect(res.body.apiKey).toBeUndefined();
 
     mailer.resetHttpSender();
   });
+
 
 });
 

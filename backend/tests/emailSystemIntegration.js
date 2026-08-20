@@ -23,54 +23,54 @@ async function runEmailTests() {
   console.log('🧪 RUNNING SECUREBANK EMAIL SYSTEM INTEGRATION TEST SUITE');
   console.log('===============================================================');
 
-  // ─── 1. HTTP Provider Resolution & Resend API ──────────────────────────────
-  console.log('\n─── TEST 1: Resend HTTP Transactional API (HTTPS/443) ───');
-  process.env.EMAIL_PROVIDER = 'resend';
-  process.env.RESEND_API_KEY = 're_test_key_12345';
-  delete process.env.BREVO_API_KEY;
-
-  const resendConfig = mailer.resolveMailConfig();
-  assert.strictEqual(resendConfig.type, 'http');
-  assert.strictEqual(resendConfig.provider, 'resend');
-  assert.strictEqual(resendConfig.transport, 'https');
-  assert.strictEqual(resendConfig.port, 443);
-  assert.strictEqual(resendConfig.secure, true);
-
-  let sentHttpCalls = [];
-  mailer.setHttpSender(async (opts) => {
-    sentHttpCalls.push(opts);
-    return 'resend-msg-98765';
-  });
-
-  const sendResult = await mailer.sendMailAsync({
-    to: 'customer@securebank.com',
-    subject: 'SecureBank Resend Test Notification',
-    html: '<p>Test HTTP transactional email</p>',
-    type: 'signup_otp',
-  });
-
-  assert.strictEqual(sendResult, true, 'sendMailAsync via HTTP API must return true on success');
-  assert.strictEqual(sentHttpCalls.length, 1);
-  assert.strictEqual(sentHttpCalls[0].to, 'customer@securebank.com');
-  console.log('✅ PASS: Resend HTTP transactional API dispatched email over HTTPS/443');
-
-  // ─── 2. Brevo HTTP Provider ────────────────────────────────────────────────
-  console.log('\n─── TEST 2: Brevo HTTP Transactional API (HTTPS/443) ───');
+  // ─── 1. Brevo HTTP Provider Resolution & Payload Structure ────────────────
+  console.log('\n─── TEST 1: Brevo HTTP Transactional API (HTTPS/443 Simulation) ───');
   process.env.EMAIL_PROVIDER = 'brevo';
-  process.env.BREVO_API_KEY = 'brevo_test_key_67890';
-  delete process.env.RESEND_API_KEY;
+  process.env.BREVO_API_KEY = 'brevo_test_key_12345';
+  process.env.EMAIL_FROM = '"SecureBank" <noreply@securebank.com>';
 
   const brevoConfig = mailer.resolveMailConfig();
   assert.strictEqual(brevoConfig.type, 'http');
   assert.strictEqual(brevoConfig.provider, 'brevo');
   assert.strictEqual(brevoConfig.transport, 'https');
   assert.strictEqual(brevoConfig.port, 443);
-  console.log('✅ PASS: Brevo HTTP transactional API configured over HTTPS/443');
+  assert.strictEqual(brevoConfig.secure, true);
+  assert.strictEqual(brevoConfig.sender.name, 'SecureBank');
+  assert.strictEqual(brevoConfig.sender.email, 'noreply@securebank.com');
 
-  // ─── 3. SMTP Fallback & Normalization ──────────────────────────────────────
-  console.log('\n─── TEST 3: SMTP Fallback & Port 465 SSL Normalization ───');
+  let sentHttpCalls = [];
+  mailer.setHttpSender(async (opts) => {
+    sentHttpCalls.push(opts);
+    return 'simulated-brevo-msg-id-98765';
+  });
+
+  const sendResult = await mailer.sendMailAsync({
+    to: 'customer@securebank.com',
+    subject: 'SecureBank Brevo Test Notification',
+    html: '<p>Test HTTP transactional email via Brevo</p>',
+    type: 'account_created',
+  });
+
+  assert.strictEqual(sendResult, true, 'sendMailAsync via HTTP API must return true on success');
+  assert.strictEqual(sentHttpCalls.length, 1);
+  assert.strictEqual(sentHttpCalls[0].to, 'customer@securebank.com');
+  console.log('✅ PASS: Brevo HTTP transactional API dispatched email over HTTPS/443 (mocked handler)');
+
+  // ─── 2. Default Provider Resolution (Defaults to Brevo) ────────────────────
+  console.log('\n─── TEST 2: Default Provider Selection (Defaults to Brevo) ───');
+  delete process.env.EMAIL_PROVIDER;
+  process.env.BREVO_API_KEY = 'brevo_test_key_67890';
+
+  const defaultConfig = mailer.resolveMailConfig();
+  assert.strictEqual(defaultConfig.type, 'http');
+  assert.strictEqual(defaultConfig.provider, 'brevo');
+  assert.strictEqual(defaultConfig.transport, 'https');
+  assert.strictEqual(defaultConfig.port, 443);
+  console.log('✅ PASS: Default provider selection cleanly selects Brevo over HTTPS/443');
+
+  // ─── 3. Explicit Local Development SMTP Config ────────────────────────────
+  console.log('\n─── TEST 3: Explicit Local Development SMTP Config (Port 465 SSL) ───');
   process.env.EMAIL_PROVIDER = 'smtp';
-  delete process.env.RESEND_API_KEY;
   delete process.env.BREVO_API_KEY;
   delete process.env.EMAIL_FORCE_PORT;
   process.env.EMAIL_HOST = 'smtp.gmail.com';
@@ -80,12 +80,13 @@ async function runEmailTests() {
   assert.strictEqual(smtpConfig.type, 'smtp');
   assert.strictEqual(smtpConfig.port, 465, 'Gmail host must automatically normalize to port 465');
   assert.strictEqual(smtpConfig.secure, true);
-  console.log('✅ PASS: SMTP fallback normalized to Port 465 with SSL for Gmail');
+  console.log('✅ PASS: Explicit local SMTP config normalized to Port 465 with SSL for Gmail');
+
 
   // ─── 4. Missing API Key Handling ───────────────────────────────────────────
   console.log('\n─── TEST 4: Missing API Key Handling ───');
-  process.env.EMAIL_PROVIDER = 'resend';
-  delete process.env.RESEND_API_KEY;
+  process.env.EMAIL_PROVIDER = 'brevo';
+  delete process.env.BREVO_API_KEY;
   mailer.resetHttpSender();
 
   const missingKeyStatus = await mailer.verifyMailConnection();
@@ -103,10 +104,10 @@ async function runEmailTests() {
   assert.strictEqual(mailer.maskEmail('invalid-email'), 'invalid');
   console.log('✅ PASS: Email masking produces secure, unexposed log strings');
 
-  // ─── 6. HTTP API Error Simulation ───
-  console.log('\n─── TEST 6: HTTP API Error Isolation ───');
+  // ─── 6. Brevo HTTP API Error Simulation ───
+  console.log('\n─── TEST 6: Brevo HTTP API Error Isolation ───');
   mailer.setHttpSender(async () => {
-    throw new Error('Resend API HTTP 429: Rate limit exceeded');
+    throw new Error('Brevo API HTTP 401: Key not found or invalid');
   });
 
   const failResult = await mailer.sendMailAsync({
@@ -119,8 +120,8 @@ async function runEmailTests() {
   assert.strictEqual(failResult, false, 'sendMailAsync must return false on API failure without throwing');
   console.log('✅ PASS: HTTP API error safely caught; banking operations remain unaffected');
 
-  // ─── 7. HTTP API Timeout Simulation ───
-  console.log('\n─── TEST 7: HTTP API Timeout (AbortError) Isolation ───');
+  // ─── 7. Brevo HTTP API Timeout Simulation ───
+  console.log('\n─── TEST 7: Brevo HTTP API Timeout (AbortError) Isolation ───');
   mailer.setHttpSender(async () => {
     const abortErr = new Error('The operation was aborted due to timeout');
     abortErr.name = 'AbortError';
@@ -137,12 +138,14 @@ async function runEmailTests() {
   assert.strictEqual(timeoutResult, false, 'sendMailAsync must return false on timeout without throwing');
   console.log('✅ PASS: HTTP timeout safely caught; transaction execution continues');
 
-  // ─── 8. All 15 Email Templates & Notification Types ────────────────────────
-  console.log('\n─── TEST 8: Verification of All 15 Email Types ───');
+  // ─── 8. All 16 Email Templates & Notification Types via Brevo ──────────────
+  console.log('\n─── TEST 8: Verification of All 16 Email Types via Brevo ───');
+  process.env.EMAIL_PROVIDER = 'brevo';
+  process.env.BREVO_API_KEY = 'brevo_test_key_12345';
   sentHttpCalls = [];
   mailer.setHttpSender(async (opts) => {
     sentHttpCalls.push(opts);
-    return 'msg-success-id';
+    return 'msg-brevo-id';
   });
 
   // 1. Signup OTP
@@ -179,8 +182,7 @@ async function runEmailTests() {
   await emailService.sendAccountCreatedEmail('user@test.com', 'Aarav Sharma', '595086858683', '9876543210');
 
   assert.strictEqual(sentHttpCalls.length, 16, `Expected 16 emails to be sent, got ${sentHttpCalls.length}`);
-  console.log('✅ PASS: All 16 email and notification types generated and dispatched through HTTP provider');
-
+  console.log('✅ PASS: All 16 email and notification types generated and dispatched through Brevo HTTP provider');
 
   // ─── 9. Non-Blocking Async Queue ──────────────────────────────────────────
   console.log('\n─── TEST 9: Non-Blocking Async Queue ───');
@@ -194,12 +196,12 @@ async function runEmailTests() {
 
   // ─── 10. Health Check Endpoint Verification ───────────────────────────────
   console.log('\n─── TEST 10: Health Check Verification ───');
-  process.env.EMAIL_PROVIDER = 'resend';
-  process.env.RESEND_API_KEY = 're_test_key_12345';
+  process.env.EMAIL_PROVIDER = 'brevo';
+  process.env.BREVO_API_KEY = 'brevo_test_key_12345';
   const healthStatus = await mailer.verifyMailConnection();
   assert.strictEqual(healthStatus.success, true);
   assert.strictEqual(healthStatus.status, 'OK');
-  assert.strictEqual(healthStatus.provider, 'resend');
+  assert.strictEqual(healthStatus.provider, 'brevo');
   assert.strictEqual(healthStatus.transport, 'https');
   assert.strictEqual(healthStatus.port, 443);
   assert.strictEqual(healthStatus.apiKey, undefined);
@@ -209,9 +211,10 @@ async function runEmailTests() {
   mailer.resetTransporter();
 
   console.log('\n===============================================================');
-  console.log('🎉 ALL MULTI-PROVIDER EMAIL SYSTEM TESTS PASSED (0 FAILURES)');
+  console.log('🎉 ALL BREVO & MULTI-PROVIDER EMAIL SYSTEM TESTS PASSED (0 FAILURES)');
   console.log('===============================================================');
 }
+
 
 runEmailTests().catch((err) => {
   console.error('❌ EMAIL TEST FAILED:', err);
