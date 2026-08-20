@@ -1,12 +1,14 @@
 /**
  * services/mailer.js
- * Production-hardened, multi-provider email system for SecureBank.
- * Supports:
- *  1. HTTP Transactional Email APIs over HTTPS/443 (Resend / Brevo) — 100% reliable in cloud environments like Render.
- *  2. Direct SSL SMTP on Port 465 (secure: true, connection pooling) as a fallback / local development option.
- *  3. Explicit provider selection via EMAIL_PROVIDER (resend | brevo | smtp).
- *  4. Fast timeouts (5000ms max) and non-blocking asynchronous queue (enqueueEmail).
- *  5. Complete safety: Never exposes secrets, passwords, or API keys; banking transactions always succeed.
+ * Production-hardened Gmail SMTP email system for SecureBank.
+ * Features:
+ *  - Pooled Nodemailer transporter (pool: true, maxConnections: 3, maxMessages: 50)
+ *  - Port 465 direct SSL connection normalization (secure: true)
+ *  - Fast socket & greeting timeouts (5000ms max connection/greeting, 10000ms socket)
+ *  - Transient network failure retry mechanism with exponential backoff
+ *  - Non-blocking asynchronous execution (enqueueEmail & sendMailAsync)
+ *  - Privacy-safe email masking and zero credential leakage
+ *  - Reusable singleton transporter lifecycle with graceful closing
  */
 const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
@@ -42,112 +44,86 @@ const parseSender = (rawFrom) => {
 };
 
 /**
- * Parse recipient into Brevo-compliant format
+ * Parse recipient into clean string or object format
  */
 const parseRecipient = (to) => {
-  if (!to) return { email: '' };
-  if (typeof to === 'string') {
-    const match = to.match(/(.*)<([^>]+)>/);
-    if (match) {
-      const name = match[1].trim().replace(/^["']|["']$/g, '');
-      return { name: name || undefined, email: match[2].trim() };
-    }
-    return { email: to.trim() };
-  }
-  if (typeof to === 'object' && to.email) {
-    return { name: to.name || undefined, email: String(to.email).trim() };
-  }
-  return { email: String(to).trim() };
+  if (!to) return '';
+  if (typeof to === 'string') return to.trim();
+  if (typeof to === 'object' && to.email) return String(to.email).trim();
+  return String(to).trim();
 };
 
 /**
- * Resolves active mail provider configuration based on environment variables.
- * Priority:
- *  1. Brevo HTTP API (Sole production choice for Render HTTPS/443) — default for all production deployments.
- *  2. SMTP Transport (Explicit local development fallback ONLY if EMAIL_PROVIDER=smtp is explicitly set in .env).
+ * Resolves active mail configuration based on environment variables.
+ * Prioritizes SMTP_* variables with fallback to EMAIL_* variables.
  */
 const resolveMailConfig = () => {
-  const provider = (process.env.EMAIL_PROVIDER || '').trim().toLowerCase();
-  const brevoApiKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim();
+  const host = (process.env.SMTP_HOST || process.env.EMAIL_HOST || 'smtp.gmail.com').trim();
+  const user = (process.env.SMTP_USER || process.env.EMAIL_USER || '').trim();
+  const pass = (process.env.SMTP_PASS || process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || '').trim();
+  const isGmail = host.toLowerCase().includes('gmail') || process.env.EMAIL_SERVICE?.toLowerCase() === 'gmail';
 
-  // 1. SMTP Transport (ONLY if explicitly set via EMAIL_PROVIDER=smtp for local offline dev)
-  if (provider === 'smtp') {
-    const host = (process.env.EMAIL_HOST || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
-    const user = (process.env.EMAIL_USER || process.env.SMTP_USER || '').trim();
-    const pass = (process.env.EMAIL_PASS || process.env.EMAIL_APP_PASSWORD || process.env.SMTP_PASS || '').trim();
-    const isGmail = host.toLowerCase().includes('gmail') || process.env.EMAIL_SERVICE?.toLowerCase() === 'gmail';
+  let port;
+  let secure;
 
-    let port;
-    let secure;
-
-    if (process.env.EMAIL_FORCE_PORT === 'true' && (process.env.EMAIL_PORT || process.env.SMTP_PORT)) {
-      port = parseInt(process.env.EMAIL_PORT || process.env.SMTP_PORT, 10);
-      secure = process.env.EMAIL_SECURE === 'true' || port === 465;
-    } else if (isGmail) {
-      port = 465;
-      secure = true;
-    } else {
-      const rawPort = process.env.EMAIL_PORT || process.env.SMTP_PORT;
-      port = rawPort ? parseInt(rawPort, 10) : 587;
-      secure = process.env.EMAIL_SECURE === 'true' || port === 465;
-    }
-
-    return {
-      type: 'smtp',
-      provider: isGmail ? 'gmail' : host,
-      transport: 'smtp',
-      host,
-      port,
-      secure,
-      user,
-      pass,
-      from: process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>',
-    };
+  if (process.env.SMTP_PORT || process.env.EMAIL_PORT) {
+    port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT, 10);
+    secure = process.env.SMTP_SECURE === 'true' || process.env.EMAIL_SECURE === 'true' || port === 465;
+  } else if (isGmail) {
+    port = 465;
+    secure = true;
+  } else {
+    port = 587;
+    secure = false;
   }
 
-  // 2. Brevo HTTP API (Sole production provider over HTTPS/443)
-  const rawFrom = process.env.EMAIL_FROM || '"SecureBank" <noreply@securebank.com>';
-  const sender = parseSender(rawFrom);
+  // Format default sender
+  const defaultSender = user ? `SecureBank <${user}>` : '"SecureBank" <noreply@securebank.com>';
+  const from = (process.env.EMAIL_FROM || defaultSender).trim();
+  const sender = parseSender(from);
+
   return {
-    type: 'http',
-    provider: 'brevo',
-    transport: 'https',
-    port: 443,
-    secure: true,
-    apiKey: brevoApiKey,
-    from: rawFrom,
+    type: 'smtp',
+    provider: isGmail ? 'gmail' : host,
+    transport: 'smtp',
+    host,
+    port,
+    secure,
+    user,
+    pass,
+    from,
     sender,
   };
 };
 
 let transporterInstance = null;
-let customHttpSender = null;
+let customHttpSender = null; // Retained for test mocking compatibility
 
-/** Create or retrieve the singleton pooled Nodemailer transporter for explicit SMTP testing */
+/**
+ * Singleton Nodemailer pooled transporter
+ */
 const getTransporter = () => {
   if (!transporterInstance) {
     const config = resolveMailConfig();
-    if (config.type === 'smtp') {
-      transporterInstance = nodemailer.createTransport({
-        host: config.host,
-        port: config.port,
-        secure: config.secure,
-        auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
-        pool: true,
-        maxConnections: 5,
-        maxMessages: 100,
-        rateDelta: 1000,
-        rateLimit: 5,
-        connectionTimeout: 5000,
-        greetingTimeout: 5000,
-        socketTimeout: 8000,
-        dnsTimeout: 3000,
-        tls: {
-          rejectUnauthorized: process.env.EMAIL_REJECT_UNAUTHORIZED === 'true',
-          minVersion: 'TLSv1.2',
-        },
-      });
-    }
+    transporterInstance = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 50,
+      rateDelta: 1000,
+      rateLimit: 5,
+      connectionTimeout: 5000, // 5s connection timeout
+      greetingTimeout: 5000,   // 5s greeting timeout
+      socketTimeout: 10000,    // 10s socket timeout
+      dnsTimeout: 3000,        // 3s DNS timeout
+      tls: {
+        rejectUnauthorized: process.env.EMAIL_REJECT_UNAUTHORIZED === 'true',
+        minVersion: 'TLSv1.2',
+      },
+    });
   }
   return transporterInstance;
 };
@@ -157,6 +133,9 @@ const setTransporter = (instance) => {
 };
 
 const resetTransporter = () => {
+  if (transporterInstance && typeof transporterInstance.close === 'function') {
+    try { transporterInstance.close(); } catch (_) {}
+  }
   transporterInstance = null;
 };
 
@@ -169,61 +148,37 @@ const resetHttpSender = () => {
 };
 
 /**
- * Dispatch email via Brevo HTTPS/443 REST API.
- * Includes strict timeout protection.
+ * Check if an error is transient and safe to retry.
+ * Permanent errors (e.g. invalid auth credentials, bad envelope address) are NOT retried.
  */
-const sendViaHttpApi = async ({ to, subject, html, text, config }) => {
-  if (customHttpSender) {
-    return await customHttpSender({ to, subject, html, text, config });
+const isTransientError = (err) => {
+  if (!err) return false;
+  // Permanent authentication / bad credential errors
+  if (err.code === 'EAUTH' || err.responseCode === 535 || err.message?.includes('535') || err.message?.includes('Username and Password not accepted')) {
+    return false;
   }
-
-  if (!config.apiKey) {
-    throw new Error(`Missing API Key for provider "${config.provider}". Please set BREVO_API_KEY.`);
+  // Permanent recipient rejection
+  if (err.responseCode === 550 || err.responseCode === 553 || err.code === 'EENVELOPE') {
+    return false;
   }
-
-  const controller = new AbortController();
-  const timeoutMs = parseInt(process.env.EMAIL_TIMEOUT_MS, 10) || 12000;
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
-
-  try {
-    const sender = config.sender || parseSender(config.from);
-    const recipient = parseRecipient(to);
-    const toPayload = [
-      recipient.name ? { email: recipient.email, name: recipient.name } : { email: recipient.email }
-    ];
-
-    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'api-key': config.apiKey,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        sender: { name: sender.name, email: sender.email },
-        to: toPayload,
-        subject,
-        htmlContent: html,
-        textContent: text || undefined,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Brevo API HTTP ${res.status}: ${errText}`);
-    }
-
-    const data = await res.json();
-    return data.messageId || 'OK';
-  } finally {
-    clearTimeout(timeoutId);
+  // Transient network / connection / timeout errors
+  if (
+    err.code === 'ETIMEDOUT' ||
+    err.code === 'ESOCKET' ||
+    err.code === 'ECONNRESET' ||
+    err.code === 'ECONNREFUSED' ||
+    err.code === 'EAI_AGAIN' ||
+    err.name === 'AbortError' ||
+    err.message?.toLowerCase().includes('timeout') ||
+    err.message?.toLowerCase().includes('greeting')
+  ) {
+    return true;
   }
+  return false;
 };
 
 /**
- * Primary email dispatch method with performance timing and error isolation.
+ * Primary email dispatch method with performance timing, retry handling, and error isolation.
  * NEVER throws an error to the caller — returns boolean true/false.
  *
  * @param {object} options
@@ -235,51 +190,66 @@ const sendViaHttpApi = async ({ to, subject, html, text, config }) => {
  * @returns {Promise<boolean>}
  */
 const sendMailAsync = async ({ to, subject, html, text, type = 'general' }) => {
-  if (!to || typeof to !== 'string' || !to.includes('@')) {
+  const recipientEmail = parseRecipient(to);
+  if (!recipientEmail || typeof recipientEmail !== 'string' || !recipientEmail.includes('@')) {
     logger.warn(`[EMAIL_REJECTED] Invalid recipient: ${to} (type=${type})`);
     return false;
   }
 
-  const masked = maskEmail(to);
+  const masked = maskEmail(recipientEmail);
   const startTime = Date.now();
   const config = resolveMailConfig();
   logger.info(`[EMAIL_ATTEMPT] provider=${config.provider} transport=${config.transport} type=${type} to=${masked}`);
 
-  try {
-    let messageId = 'OK';
+  const maxAttempts = 2; // Initial + 1 retry for transient issues
+  let lastError = null;
 
-    if (config.type === 'http') {
-      messageId = await sendViaHttpApi({ to: to.trim(), subject, html, text, config });
-    } else {
-      const transporter = getTransporter();
-      const info = await transporter.sendMail({
-        from: config.from,
-        to: to.trim(),
-        subject,
-        html,
-        text: text || undefined,
-      });
-      messageId = info.messageId || 'OK';
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      let messageId = 'OK';
+
+      if (customHttpSender) {
+        messageId = await customHttpSender({ to: recipientEmail, subject, html, text, config });
+      } else {
+        const transporter = getTransporter();
+        const info = await transporter.sendMail({
+          from: config.from,
+          to: recipientEmail,
+          subject,
+          html,
+          text: text || undefined,
+        });
+        messageId = info.messageId || 'OK';
+      }
+
+      const duration = Date.now() - startTime;
+      logger.info(`[EMAIL_SENT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms messageId=${messageId}`);
+      return true;
+    } catch (err) {
+      lastError = err;
+      const canRetry = attempt < maxAttempts && isTransientError(err);
+      if (canRetry) {
+        logger.warn(`[EMAIL_RETRY] provider=${config.provider} type=${type} to=${masked} attempt=${attempt} error="${err.message}" — Retrying in 500ms...`);
+        await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+      break;
     }
-
-    const duration = Date.now() - startTime;
-    logger.info(`[EMAIL_SENT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms messageId=${messageId}`);
-    return true;
-  } catch (err) {
-    const duration = Date.now() - startTime;
-    const isTimeout =
-      err.name === 'AbortError' ||
-      err.code === 'ETIMEDOUT' ||
-      err.code === 'ESOCKET' ||
-      err.message?.toLowerCase().includes('timeout');
-
-    if (isTimeout) {
-      logger.error(`[EMAIL_TIMEOUT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
-    } else {
-      logger.error(`[EMAIL_FAILED] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${err.message}"`);
-    }
-    return false;
   }
+
+  const duration = Date.now() - startTime;
+  const isTimeout =
+    lastError?.name === 'AbortError' ||
+    lastError?.code === 'ETIMEDOUT' ||
+    lastError?.code === 'ESOCKET' ||
+    lastError?.message?.toLowerCase().includes('timeout');
+
+  if (isTimeout) {
+    logger.error(`[EMAIL_TIMEOUT] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${lastError.message}"`);
+  } else {
+    logger.error(`[EMAIL_FAILED] provider=${config.provider} type=${type} to=${masked} duration=${duration}ms error="${lastError?.message}"`);
+  }
+  return false;
 };
 
 /**
@@ -303,92 +273,6 @@ const enqueueEmail = (fn, ...args) => {
 const verifyMailConnection = async () => {
   const config = resolveMailConfig();
 
-  // 1. Brevo HTTP Transactional API Verification
-  if (config.type === 'http') {
-    if (!config.apiKey) {
-      return {
-        success: false,
-        configured: false,
-        provider: config.provider,
-        transport: config.transport,
-        port: 443,
-        secure: true,
-        status: 'MISSING_API_KEY',
-        message: 'BREVO_API_KEY environment variable is not configured',
-      };
-    }
-
-    try {
-      if (customHttpSender) {
-        return {
-          success: true,
-          configured: true,
-          provider: config.provider,
-          transport: config.transport,
-          port: 443,
-          secure: true,
-          status: 'OK',
-          message: `Transactional Email API (${config.provider}) verified over HTTPS/443`,
-        };
-      }
-
-      // Live verification ping over HTTPS/443
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-      if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
-
-      try {
-        const res = await fetch('https://api.brevo.com/v3/account', {
-          method: 'GET',
-          headers: {
-            'api-key': config.apiKey,
-            'Accept': 'application/json',
-          },
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          return {
-            success: false,
-            configured: true,
-            provider: config.provider,
-            transport: config.transport,
-            port: 443,
-            secure: true,
-            status: 'AUTH_ERROR',
-            error: `Brevo API rejected credentials (HTTP ${res.status}): ${errText}`,
-          };
-        }
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      return {
-        success: true,
-        configured: true,
-        provider: config.provider,
-        transport: config.transport,
-        port: 443,
-        secure: true,
-        status: 'OK',
-        message: `Transactional Email API (${config.provider}) verified over HTTPS/443`,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        configured: true,
-        provider: config.provider,
-        transport: config.transport,
-        port: 443,
-        secure: true,
-        status: 'CONNECTION_ERROR',
-        error: err.message,
-      };
-    }
-  }
-
-  // 2. SMTP Verification (Fallback)
   if (!config.user || !config.pass) {
     return {
       success: false,
@@ -398,7 +282,7 @@ const verifyMailConnection = async () => {
       port: config.port,
       secure: config.secure,
       status: 'MISSING_CREDENTIALS',
-      message: 'EMAIL_USER or EMAIL_PASS environment variable is not configured',
+      message: 'SMTP_USER (or EMAIL_USER) and SMTP_PASS (or EMAIL_PASS) environment variables are not configured',
     };
   }
 
@@ -406,7 +290,7 @@ const verifyMailConnection = async () => {
     const transporter = getTransporter();
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('Connection verification timeout (5000ms)')), 5000);
+      timeoutId = setTimeout(() => reject(new Error('SMTP Connection verification timeout (5000ms)')), 5000);
       if (timeoutId && typeof timeoutId.unref === 'function') timeoutId.unref();
     });
 
@@ -434,13 +318,11 @@ const verifyMailConnection = async () => {
       transport: config.transport,
       port: config.port,
       secure: config.secure,
-      status: 'CONNECTION_ERROR',
+      status: err.code === 'EAUTH' ? 'AUTH_ERROR' : 'CONNECTION_ERROR',
       error: err.message,
     };
   }
 };
-
-
 
 module.exports = {
   resolveMailConfig,
@@ -455,5 +337,6 @@ module.exports = {
   maskEmail,
   parseSender,
   parseRecipient,
+  isTransientError,
 };
 

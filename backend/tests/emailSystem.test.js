@@ -133,20 +133,21 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
   });
 });
 
-describe('─── 2. Email Failure & Connection Timeout Isolation ───', () => {
+describe('─── 2. Email Failure, Retry Handling & Connection Timeout Isolation ───', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.EMAIL_PROVIDER = 'smtp';
     mailer.setTransporter({
       sendMail: mockSendMail,
       verify: mockVerify,
     });
   });
 
-  it('catches Connection Timeout (ETIMEDOUT) gracefully and returns false without throwing', async () => {
+  it('retries on transient Connection Timeout (ETIMEDOUT) and succeeds on attempt 2', async () => {
     const timeoutErr = new Error('Connection timeout');
     timeoutErr.code = 'ETIMEDOUT';
-    mockSendMail.mockRejectedValueOnce(timeoutErr);
+    mockSendMail
+      .mockRejectedValueOnce(timeoutErr)
+      .mockResolvedValueOnce({ messageId: 'retry-success-id' });
 
     const result = await mailer.sendMailAsync({
       to: 'customer@example.com',
@@ -155,10 +156,11 @@ describe('─── 2. Email Failure & Connection Timeout Isolation ───', 
       type: 'withdrawal',
     });
 
-    expect(result).toBe(false);
+    expect(result).toBe(true);
+    expect(mockSendMail).toHaveBeenCalledTimes(2);
   });
 
-  it('catches Auth Failure gracefully and returns false without throwing', async () => {
+  it('does NOT retry permanent Auth Failure (EAUTH) and returns false immediately', async () => {
     const authErr = new Error('Invalid login: 535-5.7.8 Username and Password not accepted');
     authErr.code = 'EAUTH';
     mockSendMail.mockRejectedValueOnce(authErr);
@@ -171,8 +173,10 @@ describe('─── 2. Email Failure & Connection Timeout Isolation ───', 
     });
 
     expect(result).toBe(false);
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
   });
 });
+
 
 describe('─── 3. All Email & Notification Service Methods ───', () => {
   beforeEach(() => {
@@ -381,36 +385,35 @@ describe('─── 4. Health Check Endpoints ───', () => {
   });
 
   it('GET /health/email returns 200 when SMTP connection is verified', async () => {
-    process.env.EMAIL_PROVIDER = 'smtp';
-    process.env.EMAIL_USER = 'test@example.com';
-    process.env.EMAIL_PASS = 'secret123';
+    process.env.SMTP_USER = 'test@example.com';
+    process.env.SMTP_PASS = 'secret123';
     mockVerify.mockResolvedValueOnce(true);
 
     const res = await request(app).get('/health/email');
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.status).toBe('OK');
+    expect(res.body.provider).toBe('gmail');
+    expect(res.body.transport).toBe('smtp');
     // Ensure no secrets are leaked
     expect(res.body.password).toBeUndefined();
     expect(res.body.pass).toBeUndefined();
     expect(res.body.apiKey).toBeUndefined();
   });
 
-  it('GET /health/email returns 200 when HTTP Brevo provider is active', async () => {
-    process.env.EMAIL_PROVIDER = 'brevo';
-    process.env.BREVO_API_KEY = 'brevo_test_key_12345';
-    mailer.setHttpSender(async () => 'mock-brevo-id');
+  it('GET /health/email returns status when credentials are not configured', async () => {
+    delete process.env.SMTP_USER;
+    delete process.env.SMTP_PASS;
+    delete process.env.EMAIL_USER;
+    delete process.env.EMAIL_PASS;
 
     const res = await request(app).get('/health/email');
-    expect(res.statusCode).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.status).toBe('OK');
-    expect(res.body.provider).toBe('brevo');
-    expect(res.body.transport).toBe('https');
-    expect(res.body.apiKey).toBeUndefined();
-
-    mailer.resetHttpSender();
+    expect(res.body.status).toBe('MISSING_CREDENTIALS');
+    expect(res.body.configured).toBe(false);
+    expect(res.body.password).toBeUndefined();
+    expect(res.body.pass).toBeUndefined();
   });
+
 
 
 });
