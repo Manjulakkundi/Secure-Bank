@@ -1,13 +1,14 @@
 /**
  * tests/emailSystem.test.js
- * Comprehensive unit and integration test suite for the email & notification system.
+ * Comprehensive unit and integration test suite for SecureBank Sendlib HTTPS email system.
  * Verifies:
- *  - Mailer engine configuration (pooling, SSL, sensible 5s timeouts)
+ *  - Sendlib API configuration and sender parsing
  *  - Email masking for security/privacy
- *  - Delivery for all 15 email/notification types
- *  - Simulated connection timeouts & error isolation (financial transactions succeed on email failure)
- *  - Asynchronous non-blocking queue execution
- *  - Email health check endpoint (/health/email)
+ *  - Delivery for all email/notification types
+ *  - Error and timeout isolation
+ *  - Transient failure retry handling
+ *  - Non-blocking queue execution
+ *  - Health check endpoint (/health/email) with 0 secrets leaked
  */
 const request = require('supertest');
 
@@ -35,17 +36,6 @@ jest.mock('../config/database', () => ({
   getConnection: jest.fn(() => Promise.resolve(mockConn)),
 }));
 
-// 2. Mock nodemailer
-const mockSendMail = jest.fn();
-const mockVerify = jest.fn();
-
-jest.mock('nodemailer', () => ({
-  createTransport: jest.fn(() => ({
-    sendMail: mockSendMail,
-    verify: mockVerify,
-  })),
-}));
-
 jest.mock('../middleware/auditLogger', () => ({
   logAudit: jest.fn().mockResolvedValue(true),
   ACTIONS: {
@@ -57,26 +47,26 @@ jest.mock('../middleware/auditLogger', () => ({
 }));
 
 process.env.JWT_SECRET = 'test_jwt_secret_key_minimum_32_characters_for_securebank';
-process.env.EMAIL_USER = 'testbank@example.com';
-process.env.EMAIL_PASS = 'mockapppassword123';
-process.env.EMAIL_HOST = 'smtp.gmail.com';
+process.env.SENDLIB_API_KEY = 'mock_sendlib_api_key_test';
 
 const app = require('../index');
 const mailer = require('../services/mailer');
 const emailService = require('../services/emailService');
 const notificationService = require('../services/notificationService');
 
-describe('─── 1. Mailer Engine & Transport Configuration ───', () => {
+describe('─── 1. Sendlib Mailer Engine & Transport Configuration ───', () => {
+  let mockSender;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.EMAIL_PROVIDER = 'smtp';
-    mailer.setTransporter({
-      sendMail: mockSendMail,
-      verify: mockVerify,
-    });
+    process.env.SENDLIB_API_KEY = 'mock_sendlib_api_key_test';
+    mockSender = jest.fn().mockResolvedValue('msg-test-12345');
+    mailer.setHttpSender(mockSender);
   });
 
-
+  afterEach(() => {
+    mailer.resetHttpSender();
+  });
 
   it('masks emails properly for privacy-safe logs', () => {
     expect(mailer.maskEmail('manjulakkundi1234@gmail.com')).toMatch(/^m\*+4@gmail\.com$/);
@@ -86,24 +76,21 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
     expect(mailer.maskEmail('notanemail')).toBe('invalid');
   });
 
-  it('correctly parses sender formats for Brevo API', () => {
-    const s1 = mailer.parseSender('SecureBank <noreply@example.com>');
-    expect(s1).toEqual({ name: 'SecureBank', email: 'noreply@example.com' });
+  it('correctly parses sender formats for Sendlib API', () => {
+    const s1 = mailer.parseSender('SecureBank <manjulakkundi1234@gmail.com>');
+    expect(s1).toEqual({ name: 'SecureBank', email: 'manjulakkundi1234@gmail.com' });
 
-    const s2 = mailer.parseSender('noreply@example.com');
-    expect(s2).toEqual({ name: 'SecureBank', email: 'noreply@example.com' });
+    const s2 = mailer.parseSender('manjulakkundi1234@gmail.com');
+    expect(s2).toEqual({ name: 'SecureBank', email: 'manjulakkundi1234@gmail.com' });
 
     const s3 = mailer.parseSender('"SecureBank Alerts" <alerts@securebank.com>');
     expect(s3).toEqual({ name: 'SecureBank Alerts', email: 'alerts@securebank.com' });
 
     const s4 = mailer.parseSender('');
-    expect(s4).toEqual({ name: 'SecureBank', email: 'noreply@securebank.com' });
+    expect(s4).toEqual({ name: 'SecureBank', email: 'manjulakkundi1234@gmail.com' });
   });
 
-
   it('sends email successfully with duration tracking and returns true', async () => {
-    mockSendMail.mockResolvedValueOnce({ messageId: 'test-msg-123' });
-
     const result = await mailer.sendMailAsync({
       to: 'customer@example.com',
       subject: 'Test Subject',
@@ -112,8 +99,8 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
     });
 
     expect(result).toBe(true);
-    expect(mockSendMail).toHaveBeenCalledTimes(1);
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledTimes(1);
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'customer@example.com',
         subject: 'Test Subject',
@@ -129,25 +116,29 @@ describe('─── 1. Mailer Engine & Transport Configuration ───', () =>
       html: '<p>Test</p>',
     });
     expect(result).toBe(false);
-    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(mockSender).not.toHaveBeenCalled();
   });
 });
 
 describe('─── 2. Email Failure, Retry Handling & Connection Timeout Isolation ───', () => {
+  let mockSender;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    mailer.setTransporter({
-      sendMail: mockSendMail,
-      verify: mockVerify,
-    });
+    mockSender = jest.fn();
+    mailer.setHttpSender(mockSender);
+  });
+
+  afterEach(() => {
+    mailer.resetHttpSender();
   });
 
   it('retries on transient Connection Timeout (ETIMEDOUT) and succeeds on attempt 2', async () => {
     const timeoutErr = new Error('Connection timeout');
     timeoutErr.code = 'ETIMEDOUT';
-    mockSendMail
+    mockSender
       .mockRejectedValueOnce(timeoutErr)
-      .mockResolvedValueOnce({ messageId: 'retry-success-id' });
+      .mockResolvedValueOnce('retry-success-id');
 
     const result = await mailer.sendMailAsync({
       to: 'customer@example.com',
@@ -157,13 +148,13 @@ describe('─── 2. Email Failure, Retry Handling & Connection Timeout Isolat
     });
 
     expect(result).toBe(true);
-    expect(mockSendMail).toHaveBeenCalledTimes(2);
+    expect(mockSender).toHaveBeenCalledTimes(2);
   });
 
-  it('does NOT retry permanent Auth Failure (EAUTH) and returns false immediately', async () => {
-    const authErr = new Error('Invalid login: 535-5.7.8 Username and Password not accepted');
-    authErr.code = 'EAUTH';
-    mockSendMail.mockRejectedValueOnce(authErr);
+  it('does NOT retry permanent Client Error (HTTP 401) and returns false immediately', async () => {
+    const authErr = new Error('Sendlib API HTTP 401: Unauthorized');
+    authErr.status = 401;
+    mockSender.mockRejectedValueOnce(authErr);
 
     const result = await mailer.sendMailAsync({
       to: 'customer@example.com',
@@ -173,27 +164,26 @@ describe('─── 2. Email Failure, Retry Handling & Connection Timeout Isolat
     });
 
     expect(result).toBe(false);
-    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(mockSender).toHaveBeenCalledTimes(1);
   });
 });
 
-
 describe('─── 3. All Email & Notification Service Methods ───', () => {
+  let mockSender;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.EMAIL_PROVIDER = 'smtp';
-    mockSendMail.mockResolvedValue({ messageId: 'mock-id' });
-    mailer.setTransporter({
-      sendMail: mockSendMail,
-      verify: mockVerify,
-    });
+    mockSender = jest.fn().mockResolvedValue('mock-msg-id');
+    mailer.setHttpSender(mockSender);
   });
 
-
+  afterEach(() => {
+    mailer.resetHttpSender();
+  });
 
   it('sends Signup OTP email', async () => {
     await emailService.sendOtpEmail('newuser@example.com', '654321', 'SIGNUP');
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'newuser@example.com',
         subject: expect.stringContaining('Verify Your Email'),
@@ -203,7 +193,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
 
   it('sends Password Reset OTP email', async () => {
     await emailService.sendOtpEmail('user@example.com', '123456', 'PASSWORD_RESET');
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'user@example.com',
         subject: expect.stringContaining('Password Reset OTP'),
@@ -213,7 +203,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
 
   it('sends Welcome email with Account Number', async () => {
     await emailService.sendWelcomeEmail('user@example.com', 'Aarav Sharma', '595086858683', 'Savings', new Date());
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'user@example.com',
         subject: expect.stringContaining('Welcome to SecureBank'),
@@ -230,7 +220,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       amount: 5000,
       newBalance: 15000,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Money Deposited') })
     );
 
@@ -242,7 +232,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       amount: 2000,
       newBalance: 13000,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Cash Withdrawal Successful') })
     );
 
@@ -255,7 +245,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       senderBalance: 12000,
       transactionId: 101,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Money Transfer Successful') })
     );
 
@@ -268,7 +258,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       receiverBalance: 8000,
       transactionId: 101,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Money Received') })
     );
   });
@@ -282,7 +272,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       durationMonths: 12,
       newBalance: 63000,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Loan Approved') })
     );
 
@@ -290,7 +280,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       toEmail: 'user@example.com',
       customerName: 'Aarav',
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Loan Application Update') })
     );
   });
@@ -301,7 +291,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       customerName: 'Aarav',
       accountNumber: '595086858683',
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Account Temporarily Frozen') })
     );
 
@@ -310,7 +300,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       customerName: 'Aarav',
       accountNumber: '595086858683',
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Account Reactivated') })
     );
   });
@@ -326,7 +316,7 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       maturityDate: '2027-08-20',
       id: 1,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Fixed Deposit Created') })
     );
 
@@ -339,10 +329,9 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       estimatedMaturityAmount: 24884,
       id: 2,
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Recurring Deposit') })
     );
-
 
     // RD Reminder
     await emailService.sendRdMonthlyReminderEmail('user@example.com', 'Aarav', {
@@ -354,67 +343,48 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       total_amount_paid: 8000,
       next_due_date: '2026-09-20',
     });
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('RD Monthly Contribution Due') })
     );
 
     // Account Created Post-Approval Email
     await emailService.sendAccountCreatedEmail('user@example.com', 'Aarav', '595086858683', '9876543210');
-    expect(mockSendMail).toHaveBeenCalledWith(
+    expect(mockSender).toHaveBeenCalledWith(
       expect.objectContaining({ subject: expect.stringContaining('Account Has Been Created') })
     );
   });
 });
 
-
-
 describe('─── 4. Health Check Endpoints ───', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mailer.setTransporter({
-      sendMail: mockSendMail,
-      verify: mockVerify,
-    });
-  });
-
   it('GET /health returns 200 and API status', async () => {
-
     const res = await request(app).get('/health');
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
   });
 
-  it('GET /health/email returns 200 when SMTP connection is verified', async () => {
-    process.env.SMTP_USER = 'test@example.com';
-    process.env.SMTP_PASS = 'secret123';
-    mockVerify.mockResolvedValueOnce(true);
+  it('GET /health/email returns 200 when Sendlib is configured', async () => {
+    process.env.SENDLIB_API_KEY = 'mock-key-12345';
 
     const res = await request(app).get('/health/email');
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.status).toBe('OK');
-    expect(res.body.provider).toBe('gmail');
-    expect(res.body.transport).toBe('smtp');
+    expect(res.body.provider).toBe('sendlib');
+    expect(res.body.transport).toBe('https');
     // Ensure no secrets are leaked
+    expect(res.body.apiKey).toBeUndefined();
     expect(res.body.password).toBeUndefined();
     expect(res.body.pass).toBeUndefined();
-    expect(res.body.apiKey).toBeUndefined();
   });
 
-  it('GET /health/email returns status when credentials are not configured', async () => {
-    delete process.env.SMTP_USER;
-    delete process.env.SMTP_PASS;
-    delete process.env.EMAIL_USER;
-    delete process.env.EMAIL_PASS;
+  it('GET /health/email returns status when Sendlib API key is not configured', async () => {
+    delete process.env.SENDLIB_API_KEY;
 
     const res = await request(app).get('/health/email');
-    expect(res.body.status).toBe('MISSING_CREDENTIALS');
+    expect(res.body.status).toBe('MISSING_API_KEY');
     expect(res.body.configured).toBe(false);
-    expect(res.body.password).toBeUndefined();
-    expect(res.body.pass).toBeUndefined();
+    expect(res.body.apiKey).toBeUndefined();
   });
-
-
-
 });
+
 

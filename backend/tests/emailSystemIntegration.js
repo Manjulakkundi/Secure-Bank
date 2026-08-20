@@ -1,16 +1,15 @@
 /**
  * tests/emailSystemIntegration.js
- * Standalone, fast integration test suite for SecureBank Gmail SMTP email system.
+ * Standalone, fast integration test suite for SecureBank Sendlib HTTPS email system.
  * Tests:
- *  1. Gmail SMTP Pooled Configuration Resolution (Port 465 SSL)
- *  2. Sender Parsing & Environment Priority (SMTP_* / EMAIL_*)
- *  3. Transient Network Failure Retry Mechanism (Exponential Backoff)
- *  4. Permanent Auth Error (EAUTH / 535) Fast Failure Isolation
- *  5. Connection Timeout Isolation
- *  6. Privacy-Safe Email Masking
- *  7. All 16 Customer and Admin Email Templates
- *  8. Non-Blocking Async Queue Execution
- *  9. Health Check Verification (/health/email) with 0 Secrets Leaked
+ *  1. Sendlib HTTPS API Configuration Resolution (Port 443 HTTPS)
+ *  2. Transient Network Failure Retry Mechanism (Exponential Backoff)
+ *  3. Permanent Client Error (HTTP 401/403) Fast Failure Isolation
+ *  4. Connection Timeout (AbortError) Isolation
+ *  5. Privacy-Safe Email Masking
+ *  6. All 16 Customer and Admin Email Templates via Sendlib API
+ *  7. Non-Blocking Async Queue Execution
+ *  8. Health Check Verification (/health/email) with 0 Secrets Leaked
  */
 const assert = require('assert');
 const mailer = require('../services/mailer');
@@ -19,27 +18,24 @@ const notificationService = require('../services/notificationService');
 
 async function runEmailTests() {
   console.log('===============================================================');
-  console.log('🧪 RUNNING SECUREBANK GMAIL SMTP EMAIL SYSTEM INTEGRATION TESTS');
+  console.log('🧪 RUNNING SECUREBANK SENDLIB HTTPS EMAIL INTEGRATION TESTS');
   console.log('===============================================================');
 
-  // ─── 1. Gmail SMTP Pooled Config Resolution ───────────────────────────────
-  console.log('\n─── TEST 1: Gmail SMTP Pooled Configuration (Port 465 SSL) ───');
-  process.env.SMTP_HOST = 'smtp.gmail.com';
-  process.env.SMTP_PORT = '465';
-  process.env.SMTP_SECURE = 'true';
-  process.env.SMTP_USER = 'securebank.official@gmail.com';
-  process.env.SMTP_PASS = 'app-password-secret-123';
-  process.env.EMAIL_FROM = 'SecureBank <securebank.official@gmail.com>';
+  // ─── 1. Sendlib HTTPS API Configuration Resolution ────────────────────────
+  console.log('\n─── TEST 1: Sendlib HTTPS API Configuration (Port 443 HTTPS) ───');
+  process.env.SENDLIB_API_KEY = 'mock_sendlib_api_key_12345';
+  process.env.EMAIL_FROM = 'SecureBank <manjulakkundi1234@gmail.com>';
 
-  const smtpConfig = mailer.resolveMailConfig();
-  assert.strictEqual(smtpConfig.type, 'smtp');
-  assert.strictEqual(smtpConfig.provider, 'gmail');
-  assert.strictEqual(smtpConfig.transport, 'smtp');
-  assert.strictEqual(smtpConfig.port, 465);
-  assert.strictEqual(smtpConfig.secure, true);
-  assert.strictEqual(smtpConfig.sender.name, 'SecureBank');
-  assert.strictEqual(smtpConfig.sender.email, 'securebank.official@gmail.com');
-  console.log('✅ PASS: Gmail SMTP pooled configuration resolved to Port 465 with SSL');
+  const mailConfig = mailer.resolveMailConfig();
+  assert.strictEqual(mailConfig.type, 'http');
+  assert.strictEqual(mailConfig.provider, 'sendlib');
+  assert.strictEqual(mailConfig.transport, 'https');
+  assert.strictEqual(mailConfig.port, 443);
+  assert.strictEqual(mailConfig.secure, true);
+  assert.strictEqual(mailConfig.from, 'manjulakkundi1234@gmail.com');
+  assert.strictEqual(mailConfig.sender.name, 'SecureBank');
+  assert.strictEqual(mailConfig.sender.email, 'manjulakkundi1234@gmail.com');
+  console.log('✅ PASS: Sendlib HTTPS configuration resolved to Port 443 HTTPS with connected Gmail sender');
 
   // ─── 2. Transient Error Retry Handling ────────────────────────────────────
   console.log('\n─── TEST 2: Transient Network Error Retry Mechanism ───');
@@ -51,7 +47,7 @@ async function runEmailTests() {
       err.code = 'ETIMEDOUT';
       throw err;
     }
-    return 'retry-msg-success-9988';
+    return '1a01f29ce6cbb4fb';
   });
 
   const retryResult = await mailer.sendMailAsync({
@@ -65,13 +61,13 @@ async function runEmailTests() {
   assert.strictEqual(attemptCount, 2, 'Must have attempted exactly 2 times');
   console.log('✅ PASS: Transient network error automatically retried and succeeded on attempt 2');
 
-  // ─── 3. Permanent Auth Error Fast Failure ─────────────────────────────────
-  console.log('\n─── TEST 3: Permanent Auth Error (535/EAUTH) Fast Failure ───');
+  // ─── 3. Permanent Client Error Fast Failure ───────────────────────────────
+  console.log('\n─── TEST 3: Permanent Client Error (HTTP 401) Fast Failure ───');
   attemptCount = 0;
   mailer.setHttpSender(async () => {
     attemptCount++;
-    const authErr = new Error('535-5.7.8 Username and Password not accepted');
-    authErr.code = 'EAUTH';
+    const authErr = new Error('Sendlib API HTTP 401: Unauthorized');
+    authErr.status = 401;
     throw authErr;
   });
 
@@ -89,8 +85,8 @@ async function runEmailTests() {
   // ─── 4. Connection Timeout Isolation ─────────────────────────────────────
   console.log('\n─── TEST 4: Connection Timeout Isolation ───');
   mailer.setHttpSender(async () => {
-    const timeoutErr = new Error('The socket connection timed out');
-    timeoutErr.code = 'ETIMEDOUT';
+    const timeoutErr = new Error('The operation was aborted due to timeout');
+    timeoutErr.name = 'AbortError';
     throw timeoutErr;
   });
 
@@ -102,7 +98,7 @@ async function runEmailTests() {
   });
 
   assert.strictEqual(timeoutResult, false, 'sendMailAsync must return false on timeout without throwing');
-  console.log('✅ PASS: SMTP timeout safely isolated; banking operations remain unaffected');
+  console.log('✅ PASS: HTTPS timeout safely isolated; banking operations remain unaffected');
 
   // ─── 5. Privacy-Safe Email Masking ────────────────────────────────────────
   console.log('\n─── TEST 5: Privacy-Safe Email Masking ───');
@@ -115,11 +111,11 @@ async function runEmailTests() {
   console.log('✅ PASS: Email masking produces secure, unexposed log strings');
 
   // ─── 6. All 16 Email Templates & Notification Types ───────────────────────
-  console.log('\n─── TEST 6: Verification of All 16 Email Types via Gmail Transporter ───');
+  console.log('\n─── TEST 6: Verification of All 16 Email Types via Sendlib HTTPS API ───');
   let sentCalls = [];
   mailer.setHttpSender(async (opts) => {
     sentCalls.push(opts);
-    return 'smtp-msg-id-12345';
+    return '1a01f29ce6cbb4fb';
   });
 
   // 1. Signup OTP
@@ -156,7 +152,7 @@ async function runEmailTests() {
   await emailService.sendAccountCreatedEmail('user@test.com', 'Aarav Sharma', '595086858683', '9876543210');
 
   assert.strictEqual(sentCalls.length, 16, `Expected 16 emails to be sent, got ${sentCalls.length}`);
-  console.log('✅ PASS: All 16 email and notification types generated and dispatched through reusable mailer');
+  console.log('✅ PASS: All 16 email and notification types generated and dispatched through Sendlib HTTPS API');
 
   // ─── 7. Non-Blocking Async Queue ──────────────────────────────────────────
   console.log('\n─── TEST 7: Non-Blocking Async Queue ───');
@@ -169,27 +165,23 @@ async function runEmailTests() {
   console.log('✅ PASS: Non-blocking async queue executed task without blocking caller');
 
   // ─── 8. Health Check Endpoint Verification ───────────────────────────────
-  console.log('\n─── TEST 8: Health Check Verification with Transporter Mock ───');
-  mailer.setTransporter({
-    verify: async () => true,
-    sendMail: async () => ({ messageId: 'test-mock-id' }),
-  });
+  console.log('\n─── TEST 8: Health Check Verification ───');
+  process.env.SENDLIB_API_KEY = 'mock_sendlib_api_key_12345';
   const healthStatus = await mailer.verifyMailConnection();
   assert.strictEqual(healthStatus.success, true);
   assert.strictEqual(healthStatus.status, 'OK');
-  assert.strictEqual(healthStatus.provider, 'gmail');
-  assert.strictEqual(healthStatus.transport, 'smtp');
-  assert.strictEqual(healthStatus.port, 465);
+  assert.strictEqual(healthStatus.provider, 'sendlib');
+  assert.strictEqual(healthStatus.transport, 'https');
+  assert.strictEqual(healthStatus.port, 443);
   assert.strictEqual(healthStatus.secure, true);
-  assert.strictEqual(healthStatus.pass, undefined);
-  assert.strictEqual(healthStatus.password, undefined);
+  assert.strictEqual(healthStatus.apiKey, undefined);
   console.log('✅ PASS: verifyMailConnection returned OK status with 0 secrets leaked');
 
   mailer.resetHttpSender();
   mailer.resetTransporter();
 
   console.log('\n===============================================================');
-  console.log('🎉 ALL GMAIL SMTP EMAIL SYSTEM TESTS PASSED (0 FAILURES)');
+  console.log('🎉 ALL SENDLIB HTTPS EMAIL SYSTEM TESTS PASSED (0 FAILURES)');
   console.log('===============================================================');
 }
 
@@ -197,4 +189,5 @@ runEmailTests().catch((err) => {
   console.error('❌ EMAIL TEST FAILED:', err);
   process.exit(1);
 });
+
 
