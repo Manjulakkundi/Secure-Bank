@@ -40,17 +40,18 @@ const validateSignup = [
 
 
 const validateLogin = [
-  // Accept accountNumber OR email OR phone — at least one required
+  // Accept identifier OR accountNumber OR email OR phone — at least one required
   body('password').notEmpty().withMessage('Password required'),
   (req, res, next) => {
-    const { accountNumber, email, phone } = req.body;
-    if (!accountNumber && !email && !phone) {
+    const { identifier, accountNumber, email, phone } = req.body;
+    if (!identifier && !accountNumber && !email && !phone) {
       return res.status(400).json({ success: false, message: 'Provide account number, email, or phone number' });
     }
     next();
   },
   handleValidation,
 ];
+
 
 const validateDeposit = [
   body('accountNumber')

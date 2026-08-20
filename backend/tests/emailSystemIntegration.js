@@ -175,9 +175,12 @@ async function runEmailTests() {
   await emailService.sendRdMonthlyReminderEmail('user@test.com', 'Aarav', { id: 2, account_id: '595086858683', monthly_amount: 2000, tenure_months: 12, contributions_completed: 4, total_amount_paid: 8000, next_due_date: '2026-09-20' });
   // 15. RD Matured
   await emailService.sendRdMaturedEmail('user@test.com', 'Aarav', { id: 2 }, { totalContributionsExpected: 12, contributionsCompleted: 12, contributionsMissed: 0, totalAmountPaid: 24000, actualInterestEarned: 884, actualMaturityAmount: 24884 });
+  // 16. Post-Approval Account Created Email
+  await emailService.sendAccountCreatedEmail('user@test.com', 'Aarav Sharma', '595086858683', '9876543210');
 
-  assert.strictEqual(sentHttpCalls.length, 15, `Expected 15 emails to be sent, got ${sentHttpCalls.length}`);
-  console.log('✅ PASS: All 15 email and notification types generated and dispatched through HTTP provider');
+  assert.strictEqual(sentHttpCalls.length, 16, `Expected 16 emails to be sent, got ${sentHttpCalls.length}`);
+  console.log('✅ PASS: All 16 email and notification types generated and dispatched through HTTP provider');
+
 
   // ─── 9. Non-Blocking Async Queue ──────────────────────────────────────────
   console.log('\n─── TEST 9: Non-Blocking Async Queue ───');

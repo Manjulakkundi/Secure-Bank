@@ -607,12 +607,94 @@ const sendRdMaturedEmail = async (toEmail, customerName, rd, actualMaturityData)
 };
 
 
+/** Account created & verified email — sent ONLY after admin approval */
+const sendAccountCreatedEmail = async (toEmail, customerName, accountNumber, customerPhone) => {
+  try {
+    if (!toEmail || !toEmail.includes('@')) return;
+    const cleanCustomerName = (customerName || 'Valued Customer').trim();
+    const cleanPhone = (customerPhone || 'Registered Mobile').trim();
+    const loginUrl = process.env.CUSTOMER_APP_URL || 'http://localhost:3000/login';
+
+    const html = wrap(`
+      <div style="text-align:center;margin-bottom:24px">
+        <div style="font-size:40px">🎉</div>
+        <h2 style="color:#1A3C5E;margin:12px 0 4px;font-size:22px">Congratulations!</h2>
+        <p style="color:#2E7D9A;font-size:15px;font-weight:600;margin:0">Your SecureBank Account Has Been Created &amp; Verified</p>
+      </div>
+
+      <p style="color:#333;font-size:14px;line-height:1.6;margin-bottom:18px">
+        Dear <strong>${cleanCustomerName}</strong>,
+      </p>
+      <p style="color:#555;font-size:14px;line-height:1.6;margin-bottom:20px">
+        Congratulations! Your SecureBank account has been successfully created and verified by our bank administration.
+      </p>
+
+      <!-- Account Number Highlight Badge -->
+      <div style="background:linear-gradient(135deg,#1A3C5E,#2E7D9A);border-radius:12px;padding:24px;text-align:center;margin:0 0 24px">
+        <p style="color:rgba(255,255,255,0.75);font-size:11px;letter-spacing:2px;font-weight:700;margin:0 0 8px;text-transform:uppercase">Account Number</p>
+        <p style="color:#fff;font-size:30px;font-weight:800;letter-spacing:6px;margin:0;font-family:monospace">${accountNumber}</p>
+        <p style="color:rgba(255,255,255,0.7);font-size:11px;margin:8px 0 0">Please store this number securely</p>
+      </div>
+
+      <!-- Account Details Table -->
+      <table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden;border:1px solid #e8eef4;margin-bottom:20px">
+        <tr style="background:#f0f7ff">
+          <td style="padding:11px 14px;font-weight:600;color:#555;font-size:13px;width:40%;border-bottom:1px solid #e8eef4">Account Number</td>
+          <td style="padding:11px 14px;font-family:monospace;font-size:14px;font-weight:700;color:#1A3C5E;border-bottom:1px solid #e8eef4">${accountNumber}</td>
+        </tr>
+        <tr>
+          <td style="padding:11px 14px;font-weight:600;color:#555;font-size:13px;border-bottom:1px solid #e8eef4">Registered Email</td>
+          <td style="padding:11px 14px;color:#333;font-size:13px;border-bottom:1px solid #e8eef4">${toEmail}</td>
+        </tr>
+        <tr style="background:#f0f7ff">
+          <td style="padding:11px 14px;font-weight:600;color:#555;font-size:13px">Registered Phone</td>
+          <td style="padding:11px 14px;color:#333;font-size:13px">${cleanPhone}</td>
+        </tr>
+      </table>
+
+      <!-- Login Credentials Guide -->
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:20px">
+        <h4 style="color:#1A3C5E;margin:0 0 10px;font-size:13px;font-weight:700">🔐 You can now log in to SecureBank using your:</h4>
+        <ul style="color:#555;font-size:13px;line-height:1.8;margin:0;padding-left:20px">
+          <li><strong>Account Number:</strong> <code>${accountNumber}</code></li>
+          <li><strong>Email Address:</strong> <code>${toEmail}</code></li>
+          <li><strong>Registered Phone Number:</strong> <code>${cleanPhone}</code></li>
+        </ul>
+      </div>
+
+      <div style="text-align:center;margin:24px 0">
+        <a href="${loginUrl}" style="background:linear-gradient(135deg,#1A3C5E,#2E7D9A);color:#fff;padding:12px 28px;text-decoration:none;border-radius:8px;font-size:14px;font-weight:700;display:inline-block">
+          Log In to SecureBank →
+        </a>
+      </div>
+
+      <div style="background:#fff8e1;border-left:4px solid #f9a825;padding:12px 16px;border-radius:4px;margin-bottom:20px">
+        <strong style="color:#795548;font-size:12px">🛡️ Security Reminder</strong>
+        <p style="color:#795548;margin:4px 0 0;font-size:12px">
+          SecureBank staff will never ask for your password, PIN, or OTP. Never share your credentials.
+        </p>
+      </div>
+
+      <p style="color:#64748B;font-size:13px;margin:20px 0 0;line-height:1.5">
+        Regards,<br>
+        <strong>SecureBank Team</strong>
+      </p>
+    `);
+
+    await send(toEmail, 'Congratulations! Your SecureBank Account Has Been Created', html, 'account_created');
+    logger.info(`[Email] Account created confirmation email dispatched to ${toEmail} for account ${accountNumber}`);
+  } catch (err) {
+    logger.warn(`Account created email failed for ${toEmail}: ${err.message}`);
+  }
+};
+
 // Keep old export name for backward compatibility
 const sendTransferNotification = sendTransactionEmail;
 
 module.exports = {
   sendOtpEmail,
   sendWelcomeEmail,
+  sendAccountCreatedEmail,
   sendTransactionEmail,
   sendTransferNotification,
   sendAccountStatusEmail,
@@ -629,4 +711,5 @@ module.exports = {
   verifyMailConnection,
   getTransporter,
 };
+
 

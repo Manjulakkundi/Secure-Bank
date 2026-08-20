@@ -37,6 +37,7 @@ const Signup = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -49,7 +50,7 @@ const Signup = () => {
     try {
       const { data } = await API.post('/customer/signup', form);
       if (data.success) {
-        navigate('/verify-otp', { state: { email: form.customerEmail, accountNumber: data.data.accountNumber } });
+        setSubmitted(true);
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Signup failed');
@@ -62,6 +63,36 @@ const Signup = () => {
     style: s.input, value: form[key],
     onChange: e => setForm({ ...form, [key]: e.target.value }),
   });
+
+  if (submitted) {
+    return (
+      <div style={s.page}>
+        <div style={{ ...s.card, textAlign: 'center' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+          <h1 style={{ ...s.title, color: '#1A3C5E', marginBottom: '12px' }}>
+            Registration Submitted Successfully
+          </h1>
+          <div style={{ background: '#EFF6FF', border: '1px solid #DBEAFE', borderRadius: '12px', padding: '20px', margin: '20px 0', textAlign: 'left' }}>
+            <p style={{ color: '#1E40AF', fontSize: '14px', lineHeight: '1.6', margin: '0 0 10px 0', fontWeight: '600' }}>
+              🛡️ Your account is currently under admin verification.
+            </p>
+            <p style={{ color: '#3B82F6', fontSize: '13px', lineHeight: '1.5', margin: 0 }}>
+              Our banking operations team is reviewing your KYC details. You will receive an official confirmation email containing your account number once approved.
+            </p>
+          </div>
+          <p style={{ color: '#64748B', fontSize: '13px', marginBottom: '28px' }}>
+            Once activated, you can log in using your Account Number, Registered Email, or Phone Number.
+          </p>
+          <button
+            style={s.btn}
+            onClick={() => navigate('/login')}
+          >
+            Go to Customer Login →
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={s.page}>
@@ -115,7 +146,7 @@ const Signup = () => {
             </div>
           </div>
           <button style={s.btn} type="submit" disabled={loading}>
-            {loading ? 'Creating Account...' : 'Create Account'}
+            {loading ? 'Submitting Registration...' : 'Register Account'}
           </button>
         </form>
         <div style={s.footer}>
@@ -127,3 +158,4 @@ const Signup = () => {
 };
 
 export default Signup;
+

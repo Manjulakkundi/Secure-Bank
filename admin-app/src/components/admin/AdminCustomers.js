@@ -95,13 +95,14 @@ const AdminCustomers = () => {
 
   const verifyAccount = async (acc) => {
     try {
-      await API.post('/admin/verify-customer', { accountNumber: acc });
-      showMsg(`Account ${acc} verified successfully.`, true);
+      const { data } = await API.post('/admin/verify-customer', { accountNumber: acc });
+      showMsg(data?.message || `Account ${acc} approved and activated successfully. Account creation email queued.`, true);
       refresh();
     } catch (e) {
       showMsg(e.response?.data?.message || 'Error verifying account.', false);
     }
   };
+
 
   const handleSubmit = async () => {
     const { type, customer } = modal;
@@ -520,8 +521,10 @@ const AdminCustomers = () => {
           >
             <option value="">All Account Statuses</option>
             <option value="Active">Active Accounts</option>
+            <option value="Pending">Pending Verification</option>
             <option value="Frozen">Frozen Accounts</option>
           </select>
+
         </div>
 
         {/* Table Content */}

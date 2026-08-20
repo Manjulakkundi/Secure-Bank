@@ -10,7 +10,9 @@ const { sendSuccess, sendCreated, sendBadRequest, sendNotFound, sendUnauthorized
 const { logAudit, ACTIONS } = require('../middleware/auditLogger');
 const logger = require('../utils/logger');
 const { sendDepositEmail, sendWithdrawEmail, sendLoanApprovedEmail, sendLoanRejectedEmail, sendFreezeEmail, sendUnfreezeEmail } = require('../services/notificationService');
+const { sendAccountCreatedEmail } = require('../services/emailService');
 const { checkAndCreateFraudAlert } = require('../services/fraudService');
+
 
 /** POST /admin/login */
 const adminLogin = async (req, res, next) => {
@@ -536,12 +538,56 @@ const getAllTransactions = async (req, res, next) => {
 const verifyCustomer = async (req, res, next) => {
   try {
     const { accountNumber } = req.body;
-    await db.query('UPDATE Customer SET AccountVerify=1 WHERE AccountNumber=?', [accountNumber]);
-    return sendSuccess(res, {}, 'Customer verified');
+    if (!accountNumber) {
+      return sendBadRequest(res, 'Account number is required');
+    }
+
+    const [rows] = await db.query(
+      'SELECT AccountNumber, customerName, customerEmail, customerPhone, AccountVerify, AccountStatus FROM Customer WHERE AccountNumber=? LIMIT 1',
+      [accountNumber]
+    );
+
+    if (rows.length === 0) {
+      return sendNotFound(res, 'Customer not found');
+    }
+
+    const customer = rows[0];
+
+    // Update customer to Verified and Active
+    await db.query(
+      "UPDATE Customer SET AccountVerify=1, AccountStatus='Active' WHERE AccountNumber=?",
+      [accountNumber]
+    );
+
+    await logAudit(
+      req.user.adminId || 'admin',
+      'CUSTOMER_VERIFICATION',
+      `Customer approved and activated: ${accountNumber} (${customer.customerEmail})`,
+      req.ip
+    );
+    logger.info(`Customer APPROVED & ACTIVATED: ${accountNumber} by admin ${req.user.username || 'admin'}`);
+
+    // Send the post-approval Account Created email asynchronously (non-blocking for response)
+    if (customer.customerEmail) {
+      sendAccountCreatedEmail(
+        customer.customerEmail,
+        customer.customerName,
+        customer.AccountNumber,
+        customer.customerPhone
+      ).catch(e => logger.warn(`Account created email error for ${customer.customerEmail}: ${e.message}`));
+    }
+
+    return sendSuccess(res, {
+      accountNumber: customer.AccountNumber,
+      customerEmail: customer.customerEmail,
+      status: 'Active',
+      verified: true,
+    }, 'Customer approved successfully. Account activated and confirmation email queued.');
   } catch (err) {
     next(err);
   }
 };
+
 
 module.exports = {
   adminLogin, getAllCustomers, getCustomerDetail, freezeAccount, unfreezeAccount,

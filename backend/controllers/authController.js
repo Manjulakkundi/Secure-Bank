@@ -42,33 +42,18 @@ const signup = async (req, res, next) => {
       `INSERT INTO Customer
         (AccountNumber, customerName, AccountType, customerPhone, customerEmail,
          customerAddress, customerCity, CustomerPassword, Balance, AccountVerify, AccountStatus)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'Active')`,
-      [accountNumber, cleanName, AccountType, cleanPhone, cleanEmail,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'Pending')`,
+      [accountNumber, cleanName, AccountType || 'Savings', cleanPhone, cleanEmail,
        cleanAddress, cleanCity, hashedPassword]
-    );
-
-    const otp       = crypto.randomInt(100000, 999999).toString();
-    const otpHash   = await bcrypt.hash(otp, 8);
-    const expiresAt = new Date(Date.now() + (parseInt(process.env.OTP_EXPIRY_MINUTES) || 10) * 60000);
-
-    await conn.query(
-      `INSERT INTO otp_verifications (email, otp_hash, purpose, expires_at)
-       VALUES (?, ?, 'SIGNUP', ?)
-       ON DUPLICATE KEY UPDATE otp_hash=?, expires_at=?, used=0`,
-      [cleanEmail, otpHash, expiresAt, otpHash, expiresAt]
     );
 
     await conn.commit();
 
-    // Send OTP for verification (non-blocking for DB commit)
-    sendOtpEmail(cleanEmail, otp, 'SIGNUP')
-      .catch(e => logger.warn(`Signup OTP email error for ${cleanEmail}: ${e.message}`));
-
-    await logAudit(accountNumber, ACTIONS.SIGNUP, `New account: ${cleanEmail}`, req.ip);
-    logger.info(`Signup: ${accountNumber} (${cleanEmail})`);
+    await logAudit(accountNumber, ACTIONS.SIGNUP, `New account registered (Pending Admin Verification): ${cleanEmail}`, req.ip);
+    logger.info(`Customer Registered: ${accountNumber} (${cleanEmail}) — Status: Pending Verification`);
 
     return sendCreated(res, { accountNumber, email: cleanEmail },
-      'Account created. Check your email for OTP verification.');
+      'Registration submitted successfully. Your account will be activated after admin verification.');
   } catch (err) {
     await conn.rollback();
     next(err);
@@ -77,10 +62,10 @@ const signup = async (req, res, next) => {
   }
 };
 
-/** POST /customer/login — supports accountNumber, email, or phone */
+/** POST /customer/login — supports identifier, accountNumber, email, or phone */
 const login = async (req, res, next) => {
   try {
-    const { accountNumber, email, phone, password } = req.body;
+    const { identifier, accountNumber, email, phone, password } = req.body;
 
     // Detect login type & normalize parameters
     let query, param, idType;
@@ -96,11 +81,26 @@ const login = async (req, res, next) => {
       query = 'SELECT * FROM Customer WHERE customerPhone = ? LIMIT 1';
       param = phone.trim();
       idType = 'phone';
+    } else if (identifier && typeof identifier === 'string' && identifier.trim()) {
+      const cleanId = identifier.trim();
+      if (cleanId.includes('@')) {
+        query = 'SELECT * FROM Customer WHERE LOWER(customerEmail) = LOWER(?) LIMIT 1';
+        param = cleanId.toLowerCase();
+        idType = 'email';
+      } else if (/^[0-9]{10}$/.test(cleanId)) {
+        query = 'SELECT * FROM Customer WHERE customerPhone = ? OR AccountNumber = ? LIMIT 1';
+        param = cleanId;
+        idType = 'phone/accountNumber';
+      } else {
+        query = 'SELECT * FROM Customer WHERE AccountNumber = ? OR customerPhone = ? OR LOWER(customerEmail) = LOWER(?) LIMIT 1';
+        param = cleanId;
+        idType = 'identifier';
+      }
     } else {
       return sendBadRequest(res, 'Provide account number, email, or phone number');
     }
 
-    const [rows] = await db.query(query, [param]);
+    const [rows] = await db.query(query, query.includes('OR') ? [param, param, param].slice(0, (query.match(/\?/g) || []).length) : [param]);
 
     if (rows.length === 0) {
       logger.warn(`Login attempt [${idType}]: user found = false | IP: ${req.ip}`);
@@ -108,20 +108,21 @@ const login = async (req, res, next) => {
     }
 
     const user = rows[0];
-    logger.info(`Login attempt [${idType}]: user found = true | AccountVerify = ${user.AccountVerify} | AccountStatus = ${user.AccountStatus} | JWT_SECRET = ${process.env.JWT_SECRET ? 'PRESENT' : 'MISSING'}`);
 
-    if (user.AccountStatus === 'Frozen') {
-      return sendUnauthorized(res, 'Your account has been frozen. Contact support.');
-    }
-
-    if (user.AccountVerify === 0) {
-      return sendUnauthorized(res, 'Please verify your email before logging in.');
-    }
-
+    // Password must always be checked securely
     const passwordMatch = await bcrypt.compare(password, user.CustomerPassword);
     if (!passwordMatch) {
       logger.warn(`Login failed: wrong password for account ${user.AccountNumber} | IP: ${req.ip}`);
       return sendUnauthorized(res, 'Invalid credentials');
+    }
+
+    // Account status & verification checks
+    if (user.AccountStatus === 'Frozen') {
+      return sendUnauthorized(res, 'Your account has been frozen. Contact support.');
+    }
+
+    if (user.AccountStatus === 'Pending' || user.AccountVerify === 0 || user.AccountStatus !== 'Active') {
+      return sendUnauthorized(res, 'Your account is pending admin verification. You will be able to log in after your account is approved.');
     }
 
     const token = createTokenForUser({
@@ -131,7 +132,7 @@ const login = async (req, res, next) => {
     });
 
     await logAudit(user.AccountNumber, ACTIONS.CUSTOMER_LOGIN, 'Customer logged in', req.ip);
-    logger.info(`Login success: ${user.AccountNumber}`);
+    logger.info(`Login success: ${user.AccountNumber} (${user.customerEmail})`);
     return sendSuccess(res, {
       token,
       accountNumber:   user.AccountNumber,
@@ -143,6 +144,7 @@ const login = async (req, res, next) => {
     next(err);
   }
 };
+
 
 /** POST /customer/verify-otp */
 const verifyOtp = async (req, res, next) => {

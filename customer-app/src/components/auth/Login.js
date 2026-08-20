@@ -41,7 +41,7 @@ const Login = () => {
     setError('');
     setLoading(true);
     try {
-      const payload = { password, [currentMode.key]: identifier.trim() };
+      const payload = { password, identifier: identifier.trim(), [currentMode.key]: identifier.trim() };
       const { data } = await API.post('/customer/login', payload);
       if (data.success) {
         login(data.data.token);
@@ -515,7 +515,7 @@ const Login = () => {
             {/* Identifier Input */}
             <div style={styles.formGroup}>
               <div style={styles.labelWrapper}>
-                <label style={styles.label}>{currentMode.label}</label>
+                <label style={styles.label}>Account Number / Email / Phone ({currentMode.label})</label>
               </div>
               <div style={styles.inputContainer(focusedField === 'identifier')}>
                 <div style={styles.inputIcon}>

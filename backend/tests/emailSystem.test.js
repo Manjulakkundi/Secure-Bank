@@ -334,8 +334,15 @@ describe('─── 3. All Email & Notification Service Methods ───', () =
       expect.objectContaining({ subject: expect.stringContaining('RD Monthly Contribution Due') })
     );
 
+    // Account Created Post-Approval Email
+    await emailService.sendAccountCreatedEmail('user@example.com', 'Aarav', '595086858683', '9876543210');
+    expect(mockSendMail).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: expect.stringContaining('Account Has Been Created') })
+    );
   });
 });
+
+
 
 describe('─── 4. Health Check Endpoints ───', () => {
   beforeEach(() => {
