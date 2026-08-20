@@ -183,7 +183,7 @@ describe('─── 2. POST /admin/verify-customer — Admin KYC Approval & Acti
         customerEmail: 'aarav.sharma@example.com',
         customerPhone: '9876543210',
         AccountVerify: 0,
-        AccountStatus: 'Pending',
+        AccountStatus: 'Active',
       }]
     ]);
     // 2. UPDATE Customer SET AccountVerify=1, AccountStatus='Active'...
@@ -229,7 +229,7 @@ describe('─── 3. POST /customer/login — Multi-Identifier & Status Checks
     expect(res.body.message).toContain('Provide account number, email, or phone number');
   });
 
-  it('blocks pending customer (AccountStatus = "Pending") with 401 and informative message', async () => {
+  it('blocks unverified customer (AccountVerify = 0) with 401 and informative message', async () => {
     db.query.mockResolvedValueOnce([
       [{
         AccountNumber: '595086858683',
@@ -238,7 +238,7 @@ describe('─── 3. POST /customer/login — Multi-Identifier & Status Checks
         customerPhone: '9876543210',
         CustomerPassword: hashedPassword,
         AccountVerify: 0,
-        AccountStatus: 'Pending',
+        AccountStatus: 'Active',
       }]
     ]);
 
@@ -251,6 +251,7 @@ describe('─── 3. POST /customer/login — Multi-Identifier & Status Checks
     expect(res.body.success).toBe(false);
     expect(res.body.message).toContain('Your account is pending admin verification. You will be able to log in after your account is approved.');
   });
+
 
   it('blocks frozen account with 401', async () => {
     db.query.mockResolvedValueOnce([

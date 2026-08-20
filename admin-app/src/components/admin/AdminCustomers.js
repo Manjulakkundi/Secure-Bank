@@ -521,9 +521,9 @@ const AdminCustomers = () => {
           >
             <option value="">All Account Statuses</option>
             <option value="Active">Active Accounts</option>
-            <option value="Pending">Pending Verification</option>
             <option value="Frozen">Frozen Accounts</option>
           </select>
+
 
         </div>
 

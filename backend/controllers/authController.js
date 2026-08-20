@@ -42,12 +42,13 @@ const signup = async (req, res, next) => {
       `INSERT INTO Customer
         (AccountNumber, customerName, AccountType, customerPhone, customerEmail,
          customerAddress, customerCity, CustomerPassword, Balance, AccountVerify, AccountStatus)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'Pending')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'Active')`,
       [accountNumber, cleanName, AccountType || 'Savings', cleanPhone, cleanEmail,
        cleanAddress, cleanCity, hashedPassword]
     );
 
     await conn.commit();
+
 
     await logAudit(accountNumber, ACTIONS.SIGNUP, `New account registered (Pending Admin Verification): ${cleanEmail}`, req.ip);
     logger.info(`Customer Registered: ${accountNumber} (${cleanEmail}) — Status: Pending Verification`);
@@ -121,9 +122,11 @@ const login = async (req, res, next) => {
       return sendUnauthorized(res, 'Your account has been frozen. Contact support.');
     }
 
-    if (user.AccountStatus === 'Pending' || user.AccountVerify === 0 || user.AccountStatus !== 'Active') {
+    if (Number(user.AccountVerify) !== 1 || user.AccountStatus !== 'Active') {
       return sendUnauthorized(res, 'Your account is pending admin verification. You will be able to log in after your account is approved.');
     }
+
+
 
     const token = createTokenForUser({
       accountNumber: user.AccountNumber,

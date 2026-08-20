@@ -139,7 +139,7 @@ async function runActivationFlowSuite() {
             CustomerPassword: pwd,
             Balance: 0,
             AccountVerify: 0,
-            AccountStatus: 'Pending',
+            AccountStatus: 'Active',
             CreatedAt: new Date(),
           };
           inMemoryCustomers.set(acc, cust);
@@ -179,10 +179,11 @@ async function runActivationFlowSuite() {
     assert.ok(accountNumber, 'Account number must be generated');
 
     const createdCust = inMemoryCustomers.get(accountNumber);
-    assert.strictEqual(createdCust.AccountStatus, 'Pending', 'Customer AccountStatus must be "Pending"');
-    assert.strictEqual(createdCust.AccountVerify, 0, 'Customer AccountVerify must be 0');
+    assert.strictEqual(createdCust.AccountStatus, 'Active', 'Customer AccountStatus must be "Active"');
+    assert.strictEqual(createdCust.AccountVerify, 0, 'Customer AccountVerify must be 0 (Pending Admin Approval)');
     assert.strictEqual(sentEmails.length, 0, 'No signup OTP email should be sent');
-    console.log(`✅ PASS: Customer registered in "Pending" status (Account: ${accountNumber}). No OTP required.`);
+    console.log(`✅ PASS: Customer registered in "Pending" status (AccountVerify = 0, Account: ${accountNumber}). No OTP required.`);
+
 
     // ─── TEST 2: Login Before Admin Approval ────────────────────────────────
     console.log('\n─── TEST 2: Customer Login Attempt Before Admin Approval (Must be Blocked) ───');
